@@ -88,7 +88,10 @@ android {
         release {
             optimization {
                 enable = true
-                packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
+                // 注意: 不要设置 packageScope。该 DSL 会把作用域外的类重打包到根包
+                // (如 kotlin 类被改名为根包 ig)，且父类访问级别未随之放宽,
+                // 运行时在 androidx.startup 初始化时抛 IllegalAccessError 导致 app 无法启动。
+                // 默认全量 R8 混淆(类名保留原包前缀)是经过验证的稳定路径。
             }
             // CI 签名: 环境变量齐全时对 release APK 签名, 否则产出未签名 APK (CI 回退用 debug 包)
             val storeFilePath = System.getenv("RELEASE_STORE_FILE")

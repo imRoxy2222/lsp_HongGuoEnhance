@@ -80,6 +80,7 @@ HongGuoEnhance/
 - [安装与使用](doc/安装与使用.md) — 安装步骤、常见问题与失效排查
 - [版本号自动升级](doc/版本号自动升级.md) — versionCode/versionName 取当前分支 commit 次数
 - [GitHub自动发布](doc/GitHub自动发布.md) — 打 tag 自动打包、发布 Release 并同步 LSPosed 模块仓库
+- [Release包无法启动修复](doc/Release包无法启动修复.md) — R8 packageScope 导致启动即崩的根因与修复
 
 ## 调试
 
