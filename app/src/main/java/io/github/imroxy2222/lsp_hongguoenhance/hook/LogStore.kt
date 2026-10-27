@@ -221,8 +221,23 @@ object LogStore {
         }
     }
 
-    private fun touchSeries(w: SQLiteDatabase, seriesId: String, name: String?, now: Long) {
-        w.rawQuery("SELECT name FROM series WHERE series_id=?", arrayOf(seriesId)).use { c ->
+    /**
+     * 回填剧名：只更新已存在的 series 行（不凭空建行——没产生过日志的剧
+     * 不应出现在日志列表里）。
+     */
+    fun updateSeriesName(seriesId: String, name: String) {
+        val d = db() ?: return
+        try {
+            d.writableDatabase.execSQL(
+                "UPDATE series SET name=? WHERE series_id=?",
+                arrayOf(name, seriesId)
+            )
+        } catch (t: Throwable) {
+            Logger.e("log updateSeriesName failed: $seriesId", t)
+        }
+    }
+
+    private fun touchSeries(w: SQLiteDatabase, seriesId: String, name: String?, now: Long) {        w.rawQuery("SELECT name FROM series WHERE series_id=?", arrayOf(seriesId)).use { c ->
             if (c.moveToFirst()) {
                 val old = c.getString(0)
                 w.execSQL(

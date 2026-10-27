@@ -94,7 +94,8 @@ object Pipeline {
     fun onShareClicked(activity: Activity, seriesId: String) {
         // 日志存储/服务兜底初始化（幂等；放到工作线程避免主线程 DB/文件 IO）
         val appContext = activity.applicationContext
-        val cache = caches.getOrPut(seriesId) { SeriesCache(seriesId, SeriesIdHolder.currentName) }
+        // 剧名按 seriesId 精确匹配（未打开过该剧剧评页时为 null，仅记 id）
+        val cache = caches.getOrPut(seriesId) { SeriesCache(seriesId, SeriesIdHolder.nameOf(seriesId)) }
         executor.execute {
             runCatching { LogStore.init(appContext) }
             runCatching { LogServer.ensureStarted(appContext) }
@@ -111,6 +112,20 @@ object Pipeline {
         }
     }
 
+    /**
+     * 剧名采集回填：用户打开某剧剧评页时拿到 (seriesId, seriesName)，
+     * 若该剧行已存在于日志库则更新剧名——即使之前分享时没有剧名，
+     * 事后打开一次剧评页即可补全，无需重新分享。
+     */
+    fun onSeriesNameCaptured(seriesId: String?, name: String?) {
+        if (seriesId.isNullOrEmpty() || name.isNullOrEmpty()) return
+        // getSeriesId 播放期间高频触发：名字没变化就不写库
+        if (SeriesIdHolder.nameOf(seriesId) == name) return
+        executor.execute {
+            runCatching { LogStore.updateSeriesName(seriesId, name) }
+        }
+    }
+
     fun onDialogDismissed(dialog: TagDialog) {
         if (activeDialog?.get() === dialog) activeDialog = null
     }
@@ -120,7 +135,7 @@ object Pipeline {
 
     /** "继续加载"：再拉一批评论，随后重新 AI 总结。 */
     fun loadMore(seriesId: String) {
-        val cache = caches.getOrPut(seriesId) { SeriesCache(seriesId, SeriesIdHolder.currentName) }
+        val cache = caches.getOrPut(seriesId) { SeriesCache(seriesId, SeriesIdHolder.nameOf(seriesId)) }
         if (cache.state == State.COLLECTING || cache.state == State.AI_PENDING) return
         executor.execute {
             try {
