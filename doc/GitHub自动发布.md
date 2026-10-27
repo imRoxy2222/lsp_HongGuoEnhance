@@ -84,6 +84,16 @@ export RELEASE_KEY_PASSWORD=你的key密码
 ./gradlew :app:installRelease "-Dorg.gradle.java.home=C:/Users/Frank2222/.vfox/sdks/java"
 ```
 
+PowerShell 7 写法（`$env:` 变量仅当前会话有效；Windows 下用 `gradlew.bat`）：
+
+```powershell
+$env:RELEASE_STORE_FILE = "hongguo-release.jks"
+$env:RELEASE_STORE_PASSWORD = "你的库密码"
+$env:RELEASE_KEY_ALIAS = "hongguo"
+$env:RELEASE_KEY_PASSWORD = "你的key密码"
+.\gradlew.bat :app:installRelease "-Dorg.gradle.java.home=C:/Users/Frank2222/.vfox/sdks/java"
+```
+
 - 本地 release 包 ↔ CI Release 包：同 jks，签名一致，可互相覆盖安装。
 - 任何包 ↔ debug 包（`installDebug` 或未配 secrets 时 CI 的产物）：签名冲突，不能覆盖安装。
 - keystore 文件（`.jks` / `.b64`）已在 `.gitignore` 中，放置于项目根目录不会被提交，但建议移到代码区外并备份。
