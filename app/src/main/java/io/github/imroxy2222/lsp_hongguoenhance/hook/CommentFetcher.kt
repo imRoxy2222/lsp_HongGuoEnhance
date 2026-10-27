@@ -36,6 +36,9 @@ object CommentFetcher {
     /** 单次请求超时（毫秒）：超时后进入 fallback 路径或报错。 */
     private const val REQUEST_TIMEOUT_MS = 15_000L
 
+    /** 评论文本最小长度（字数），需求规格：默认采集字数 > 20 的评论。 */
+    private const val MIN_TEXT_LENGTH = 20
+
     data class Page(
         val comments: List<String>,   // 本页合格（长度过滤后）评论文本，即交给 AI 的部分
         val all: List<String>,        // 本页抓到的全部评论文本（含被过滤丢弃的）
@@ -276,7 +279,7 @@ object CommentFetcher {
             val t = text.trim()
             if (t.isEmpty()) continue
             all.add(t)
-            usedFlags.add(t.length > 10)
+            usedFlags.add(t.length > MIN_TEXT_LENGTH)
         }
         val texts = all.filterIndexed { i, _ -> usedFlags[i] }
         Logger.i("page fetched: raw=${dataList.size}, got=${all.size}, filtered=${texts.size}, hasMore=$hasMore")

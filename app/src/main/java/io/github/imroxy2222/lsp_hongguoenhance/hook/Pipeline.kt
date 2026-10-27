@@ -144,16 +144,23 @@ object Pipeline {
                     updateState(seriesId, State.DONE, "剧评已全部加载完（${cache.comments.size} 条）")
                     return@execute
                 }
-                var page = CommentFetcher.fetchPage(seriesId, cache.cursor, ModuleConfig.pageCount())
-                cache.comments.addAll(page.comments)
+                // 单批精确截断：本批新增合格评论总数不超过单批加载条数
+                val batchCap = ModuleConfig.pageCount()
+                var batchCount = 0
+                var page = CommentFetcher.fetchPage(seriesId, cache.cursor, batchCap)
+                val first = page.comments.take(batchCap - batchCount)
+                batchCount += first.size
+                cache.comments.addAll(first)
                 LogStore.appendComments(seriesId, page.all, page.used)
                 cache.cursor = page.cursor
                 cache.hasMore = page.hasMore
                 // 过滤后不足一批时继续补一页（最多再补 2 次）
                 var retry = 0
-                while (page.comments.size < 5 && page.hasMore && retry < 2) {
-                    page = CommentFetcher.fetchPage(seriesId, page.cursor, ModuleConfig.pageCount())
-                    cache.comments.addAll(page.comments)
+                while (page.comments.size < 5 && page.hasMore && retry < 2 && batchCount < batchCap) {
+                    page = CommentFetcher.fetchPage(seriesId, page.cursor, batchCap)
+                    val toAdd = page.comments.take(batchCap - batchCount)
+                    batchCount += toAdd.size
+                    cache.comments.addAll(toAdd)
                     LogStore.appendComments(seriesId, page.all, page.used)
                     cache.cursor = page.cursor
                     cache.hasMore = page.hasMore
@@ -176,7 +183,9 @@ object Pipeline {
                 updateState(seriesId, State.COLLECTING, "正在采集剧评...")
                 val target = ModuleConfig.targetCount()
                 var page = CommentFetcher.fetchPage(seriesId, null, ModuleConfig.pageCount())
-                cache.comments.addAll(page.comments)
+                // 精确截断：首次采集 target 是"恰好 N 条"语义，
+                // 页内合格数可能超过剩余缺口（如 target=10、页 count=30），按缺口截取
+                cache.comments.addAll(page.comments.take(target))
                 LogStore.appendComments(seriesId, page.all, page.used)
                 cache.cursor = page.cursor
                 cache.hasMore = page.hasMore
@@ -184,7 +193,9 @@ object Pipeline {
                 while (cache.comments.size < target && cache.hasMore && rounds < 10) {
                     notifyComments(seriesId, "正在采集剧评 ${cache.comments.size}/$target...")
                     page = CommentFetcher.fetchPage(seriesId, page.cursor, ModuleConfig.pageCount())
-                    cache.comments.addAll(page.comments)
+                    // 只补足缺口，多余合格评论留待"继续加载"（避免 9+2=11 超量发给 AI）
+                    val remaining = target - cache.comments.size
+                    cache.comments.addAll(page.comments.take(remaining))
                     LogStore.appendComments(seriesId, page.all, page.used)
                     cache.cursor = page.cursor
                     cache.hasMore = page.hasMore
