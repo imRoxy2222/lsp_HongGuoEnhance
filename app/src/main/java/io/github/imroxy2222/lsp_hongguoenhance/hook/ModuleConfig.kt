@@ -25,8 +25,8 @@ object ModuleConfig {
     const val KEY_LOG_SERVER_STATUS = "log_server_status" // 宿主端服务状态上报（诊断用）
     const val KEY_LOG_DB_PATH = "log_db_path"     // 宿主端真实日志数据库路径上报（root 直读用）
 
-    const val DEFAULT_BASE_URL = "https://api.openai.com/v1"
-    const val DEFAULT_MODEL = "gpt-4o-mini"
+    const val DEFAULT_BASE_URL = "https://api.deepseek.com"
+    const val DEFAULT_MODEL = "deepseek-flash"
     const val DEFAULT_TARGET_COUNT = 50
     const val DEFAULT_PAGE_COUNT = 10
     const val DEFAULT_LOG_RETENTION_DAYS = 30

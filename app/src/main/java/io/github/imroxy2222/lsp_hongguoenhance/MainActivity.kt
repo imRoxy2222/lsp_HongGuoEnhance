@@ -191,21 +191,29 @@ fun SettingsScreen(
     var apiKey by remember(initial) { mutableStateOf(str(ModuleConfig.KEY_API_KEY, "")) }
     var model by remember(initial) { mutableStateOf(str(ModuleConfig.KEY_MODEL, "")) }
     var targetCount by remember(initial) {
-        mutableStateOf(((initial?.get(ModuleConfig.KEY_TARGET_COUNT) as? Int)
-            ?: ModuleConfig.DEFAULT_TARGET_COUNT).toString())
+        mutableStateOf(
+            ((initial?.get(ModuleConfig.KEY_TARGET_COUNT) as? Int)
+                ?: ModuleConfig.DEFAULT_TARGET_COUNT).toString()
+        )
     }
     var pageCount by remember(initial) {
-        mutableStateOf(((initial?.get(ModuleConfig.KEY_PAGE_COUNT) as? Int)
-            ?: ModuleConfig.DEFAULT_PAGE_COUNT).toString())
+        mutableStateOf(
+            ((initial?.get(ModuleConfig.KEY_PAGE_COUNT) as? Int)
+                ?: ModuleConfig.DEFAULT_PAGE_COUNT).toString()
+        )
     }
     var extraPrompt by remember(initial) { mutableStateOf(str(ModuleConfig.KEY_EXTRA_PROMPT, "")) }
     var logRetentionDays by remember(initial) {
-        mutableStateOf(((initial?.get(ModuleConfig.KEY_LOG_RETENTION_DAYS) as? Int)
-            ?: ModuleConfig.DEFAULT_LOG_RETENTION_DAYS).toString())
+        mutableStateOf(
+            ((initial?.get(ModuleConfig.KEY_LOG_RETENTION_DAYS) as? Int)
+                ?: ModuleConfig.DEFAULT_LOG_RETENTION_DAYS).toString()
+        )
     }
     var logMaxSizeMb by remember(initial) {
-        mutableStateOf(((initial?.get(ModuleConfig.KEY_LOG_MAX_SIZE_MB) as? Int)
-            ?: ModuleConfig.DEFAULT_LOG_MAX_SIZE_MB).toString())
+        mutableStateOf(
+            ((initial?.get(ModuleConfig.KEY_LOG_MAX_SIZE_MB) as? Int)
+                ?: ModuleConfig.DEFAULT_LOG_MAX_SIZE_MB).toString()
+        )
     }
 
     Column(
@@ -231,7 +239,7 @@ fun SettingsScreen(
         OutlinedTextField(
             value = baseUrl,
             onValueChange = { baseUrl = it },
-            label = { Text("Base URL（如 https://api.deepseek.com/v1）") },
+            label = { Text("Base URL（如 https://api.deepseek.com）") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true
         )
@@ -245,7 +253,7 @@ fun SettingsScreen(
         OutlinedTextField(
             value = model,
             onValueChange = { model = it },
-            label = { Text("模型名（如 deepseek-chat / gpt-4o-mini）") },
+            label = { Text("模型名（如 deepseek-flash）") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true
         )
@@ -318,10 +326,5 @@ fun SettingsScreen(
             },
             modifier = Modifier.fillMaxWidth()
         ) { Text("保存配置") }
-
-        Text(
-            "使用说明：在 LSPosed 中启用本模块并勾选红果短剧作用域 → 强停红果短剧 → 打开任意短剧播放页 → 点击右侧分享按钮，将弹出\"评论词条\"页。",
-            style = MaterialTheme.typography.bodySmall
-        )
     }
 }
