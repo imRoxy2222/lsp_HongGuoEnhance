@@ -36,8 +36,14 @@ object CommentFetcher {
     /** 单次请求超时（毫秒）：超时后进入 fallback 路径或报错。 */
     private const val REQUEST_TIMEOUT_MS = 15_000L
 
-    /** 评论文本最小长度（字数），需求规格：默认采集字数 > 20 的评论。 */
-    private const val MIN_TEXT_LENGTH = 20
+    /** 评论文本最小长度（字数），达到即通过（>=）。 */
+    private const val MIN_TEXT_LENGTH = 15
+
+    /** 排除型过滤：含"第X季"（多为剧名/续季宣传语）或"更新"（多为催更/版本讨论）的评论，对剧情判断无价值。 */
+    private val EXCLUDE_PATTERNS = listOf(
+        Regex("第.+季"),
+        Regex("更新"),
+    )
 
     data class Page(
         val comments: List<String>,   // 本页合格（长度过滤后）评论文本，即交给 AI 的部分
@@ -244,7 +250,7 @@ object CommentFetcher {
     // 响应解析与诊断
     // ------------------------------------------------------------------
 
-    /** 解析响应：过滤长度<=20 的评论。 */
+    /** 解析响应：过滤长度<15、或含"第X季"/"更新"的评论。 */
     private fun parsePage(response: Any): Page {
         // 两条路径的返回类型不同：
         //   wrapper 路径 h.e(...)            -> Single<CommentListData>（已 map 解包）
@@ -284,12 +290,18 @@ object CommentFetcher {
             val score = (getField(reply, "expand")?.let { getField(it, "score") } as? String)
                 ?.toFloatOrNull()
             all.add(t)
-            usedFlags.add(t.length > MIN_TEXT_LENGTH)
+            usedFlags.add(shouldKeep(t))
             scores.add(score)
         }
         val texts = all.filterIndexed { i, _ -> usedFlags[i] }
         Logger.i("page fetched: raw=${dataList.size}, got=${all.size}, filtered=${texts.size}, hasMore=$hasMore")
         return Page(texts, all, usedFlags, scores, dataList.size, cursor, hasMore)
+    }
+
+    /** 过滤判定：字数 >= [MIN_TEXT_LENGTH]，且不命中 [EXCLUDE_PATTERNS] 任一排除规则。 */
+    private fun shouldKeep(t: String): Boolean {
+        if (t.length < MIN_TEXT_LENGTH) return false
+        return EXCLUDE_PATTERNS.none { it.containsMatchIn(t) }
     }
 
     /** dump 响应中的 code / message / debug_info / log_id / Header。 */

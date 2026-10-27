@@ -307,7 +307,7 @@ object Pipeline {
                 // 无新增（如全部与历史重复）：保留旧词条直接结束
                 updateState(seriesId, State.DONE, "没有新增评论，保留原词条（${cache.comments.size} 条）")
             } else {
-                updateState(seriesId, State.ERROR, "没有符合条件的评论（需字数>20）")
+                updateState(seriesId, State.ERROR, "没有符合条件的评论")
             }
             return
         }

@@ -2,12 +2,7 @@ package io.github.imroxy2222.lsp_hongguoenhance.hook
 
 import android.app.Activity
 import android.app.Dialog
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.LinearGradient
-import android.graphics.Paint
-import android.graphics.Shader
-import android.graphics.Typeface
+import android.graphics.*
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
@@ -17,7 +12,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Toast
+import io.github.imroxy2222.lsp_hongguoenhance.hook.TagDialog.Companion.MAX_SHOWN_TAGS
 
 /**
  * "评论词条"页面 —— 点击分享按钮后弹出的替换页面。
@@ -32,6 +27,11 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
     private lateinit var loadMoreBtn: Button
     private lateinit var retryBtn: Button
     private var lastTags: List<AiClient.Tag> = emptyList()
+
+    companion object {
+        /** 词条栏最多显示的词条数（tags 已按数量降序，取前 N 名）。 */
+        private const val MAX_SHOWN_TAGS = 10
+    }
 
     override fun show() {
         requestWindowFeature(Window.FEATURE_NO_TITLE)
@@ -132,16 +132,20 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
     /**
      * 词条列表渲染（方案A：横向条形图）。
      * 每行：词条名（固定宽，超长跑马灯滚动）+ 条形（长度∝count/maxCount）+ ×N。
+     * 仅显示排名前 [MAX_SHOWN_TAGS] 个（tags 已按数量降序），完整列表仍持久化。
      */
     fun onTags(tags: List<AiClient.Tag>) {
         lastTags = tags
         activity.runOnUiThread {
             tagContainer.removeAllViews()
-            val maxCount = tags.maxOfOrNull { it.count }?.coerceAtLeast(1) ?: 1
-            for (t in tags) {
+            val shown = tags.take(MAX_SHOWN_TAGS)
+            val maxCount = shown.maxOfOrNull { it.count }?.coerceAtLeast(1) ?: 1
+            for (t in shown) {
                 tagContainer.addView(makeTagRow(t.text, t.count, t.count.toFloat() / maxCount))
             }
-            stateView.text = "${Pipeline.statsLine(seriesId)} · 共 ${tags.size} 个词条"
+            val totalInfo =
+                if (tags.size > shown.size) "（共 ${tags.size} 个，显示前 ${shown.size}）" else " · 共 ${tags.size} 个词条"
+            stateView.text = "${Pipeline.statsLine(seriesId)}$totalInfo"
         }
     }
 
@@ -244,7 +248,7 @@ private class BarView(context: android.content.Context, private val fraction: Fl
             val fillW = (w * fraction).coerceAtLeast(h)
             fillPaint.shader = LinearGradient(
                 0f, 0f, fillW, 0f,
-                Color.parseColor("#00E676"), Color.parseColor("#B9FF66"),
+                Color.parseColor("#242323"), Color.parseColor("#B9FF66"),
                 Shader.TileMode.CLAMP
             )
             canvas.drawRoundRect(0f, 0f, fillW, h, radius, radius, fillPaint)
