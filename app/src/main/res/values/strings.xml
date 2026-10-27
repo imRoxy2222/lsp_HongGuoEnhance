@@ -1,3 +1,4 @@
 <resources>
-    <string name="app_name">HongGuoEnhance</string>
+    <string name="app_name">我不赤石</string>
+    <string name="module_description">AI总结红果短剧类型Tag, 防止赤石</string>
 </resources>

@@ -78,6 +78,8 @@ HongGuoEnhance/
 - [评论词条日志](doc/评论词条日志.md) — 按剧分文件存储、App 内两级查看与自动清理
 - [设置页与配置](doc/设置页与配置.md) — 配置项与跨进程共享机制
 - [安装与使用](doc/安装与使用.md) — 安装步骤、常见问题与失效排查
+- [版本号自动升级](doc/版本号自动升级.md) — versionCode/versionName 取当前分支 commit 次数
+- [GitHub自动发布](doc/GitHub自动发布.md) — 打 tag 自动打包、发布 Release 并同步 LSPosed 模块仓库
 
 ## 调试
 

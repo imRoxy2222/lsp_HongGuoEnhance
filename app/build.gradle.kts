@@ -3,6 +3,71 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+import org.gradle.api.provider.ValueSource
+import org.gradle.api.provider.ValueSourceParameters
+
+// 获取当前分支 commit 次数作为版本号来源 (兼容 Configuration Cache)
+// 输出非整数或执行异常时返回 null, 由 getOrElse 回退为 1
+abstract class GitCommitCountSource : ValueSource<Int, GitCommitCountSource.Params> {
+    interface Params : ValueSourceParameters {
+        val projectDir: Property<String>
+    }
+
+    override fun obtain(): Int? {
+        return try {
+            val process = ProcessBuilder("git", "rev-list", "--count", "HEAD")
+                .directory(File(parameters.projectDir.get()))
+                .redirectErrorStream(true)
+                .start()
+            val output = process.inputStream.bufferedReader().readText().trim()
+            process.waitFor()
+            output.toIntOrNull()
+        } catch (e: Exception) {
+            null
+        }
+    }
+}
+
+val commitCount = providers.of(GitCommitCountSource::class) {
+    parameters.projectDir.set(rootDir.absolutePath)
+}.getOrElse(1)
+
+// 构建期生成 META-INF/xposed/module.prop (含 versionCode, LSPosed 仓库/管理器据此识别更新版本)
+val modulePropDir = layout.buildDirectory.dir("generated/moduleProp")
+
+abstract class GenerateModulePropTask : DefaultTask() {
+    @get:Input
+    val commitCountValue: Property<Int> = project.objects.property(Int::class.java)
+
+    @get:OutputDirectory
+    val outputDir: DirectoryProperty = project.objects.directoryProperty()
+
+    @TaskAction
+    fun generate() {
+        val file = outputDir.file("META-INF/xposed/module.prop").get().asFile
+        file.parentFile.mkdirs()
+        file.writeText(
+            """
+            id=io.github.imroxy2222.lsp_hongguoenhance
+            name=我不赤石
+            version=${commitCountValue.get()}
+            versionCode=${commitCountValue.get()}
+            author=imroxy2222
+            description=AI总结红果短剧类型Tag, 防止赤石
+            minApiVersion=102
+            targetApiVersion=102
+            staticScope=true
+            """.trimIndent() + "\n",
+            Charsets.UTF_8
+        )
+    }
+}
+
+val generateModuleProp = tasks.register("generateModuleProp", GenerateModulePropTask::class) {
+    commitCountValue.set(commitCount)
+    outputDir.set(modulePropDir)
+}
+
 android {
     namespace = "io.github.imroxy2222.lsp_hongguoenhance"
     compileSdk {
@@ -13,8 +78,8 @@ android {
         applicationId = "io.github.imroxy2222.lsp_hongguoenhance"
         minSdk = 29
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = commitCount
+        versionName = commitCount.toString()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -24,6 +89,16 @@ android {
             optimization {
                 enable = true
                 packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
+            }
+            // CI 签名: 环境变量齐全时对 release APK 签名, 否则产出未签名 APK (CI 回退用 debug 包)
+            val storeFilePath = System.getenv("RELEASE_STORE_FILE")
+            if (storeFilePath != null) {
+                signingConfig = signingConfigs.create("ci") {
+                    storeFile = rootProject.file(storeFilePath)
+                    storePassword = System.getenv("RELEASE_STORE_PASSWORD")
+                    keyAlias = System.getenv("RELEASE_KEY_ALIAS")
+                    keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+                }
             }
         }
     }
@@ -54,4 +129,14 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
+}
+
+// 通过 Variant API 把生成的 module.prop 注册为打包资源 (自动携带任务依赖)
+androidComponents {
+    onVariants { variant ->
+        variant.sources.resources?.addGeneratedSourceDirectory(
+            generateModuleProp,
+            GenerateModulePropTask::outputDir
+        )
+    }
 }

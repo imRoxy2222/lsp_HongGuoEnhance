@@ -1,0 +1,101 @@
+# 发布流程: 打 v* tag -> 打包 APK -> 本仓库创建 Release -> 同步发布到 LSPosed 模块仓库
+name: Release APK
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # versionCode = commit 次数, 必须完整拉取历史, 否则永远是 1
+          fetch-depth: 0
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle (含缓存)
+        uses: gradle/actions/setup-gradle@v4
+
+      # 配置了签名 secrets 时构建 release 包, 否则回退 debug 包 (CI debug key 签名, 可安装)
+      - name: Prepare signing (optional)
+        id: sign
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/ci-release.jks"
+            {
+              echo "RELEASE_STORE_FILE=$RUNNER_TEMP/ci-release.jks"
+              echo "RELEASE_STORE_PASSWORD=$KEYSTORE_PASSWORD"
+              echo "RELEASE_KEY_ALIAS=$KEY_ALIAS"
+              echo "RELEASE_KEY_PASSWORD=$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+            echo "gradle_task=:app:assembleRelease" >> "$GITHUB_OUTPUT"
+            echo "apk_path=app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_OUTPUT"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "gradle_task=:app:assembleDebug" >> "$GITHUB_OUTPUT"
+            echo "apk_path=app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_OUTPUT"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build APK
+        run: ./gradlew ${{ steps.sign.outputs.gradle_task }}
+
+      - name: Collect APK
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          cp "${{ steps.sign.outputs.apk_path }}" "dist/HongGuoEnhance-${TAG}.apk"
+          ls -l dist/
+
+      # 仅告警不阻断: versionCode = commit 次数, tag 建议命名为 v<commit 次数>
+      - name: Check tag vs versionCode
+        run: |
+          VCODE=$(grep '^versionCode=' app/build/generated/moduleProp/META-INF/xposed/module.prop | cut -d= -f2)
+          TAG_NUM="${GITHUB_REF_NAME#v}"
+          if [ "$TAG_NUM" != "$VCODE" ]; then
+            echo "::warning::tag ${GITHUB_REF_NAME} 与 APK 内 versionCode=${VCODE} 不一致, 建议 tag 命名为 v<commit 次数>"
+          fi
+
+      - name: Create Release (this repo)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" --title "$TAG" --generate-notes dist/HongGuoEnhance-*.apk \
+            || { echo "Release 已存在, 改为覆盖上传资源"; gh release upload "$TAG" --clobber dist/HongGuoEnhance-*.apk; }
+
+      # 同步发布到 LSPosed 模块仓库 (只放 release/readme, 不放代码)
+      # 前提: 仓库变量 LSPOSED_REPO = LSPosed 模块仓库的 owner/name; secret LSPOSED_TOKEN = 对其有写权限的 PAT
+      - name: Publish Release to LSPosed module repo
+        if: ${{ vars.LSPOSED_REPO != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.LSPOSED_TOKEN }}
+          LSPOSED_REPO: ${{ vars.LSPOSED_REPO }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          NOTES=$(cat <<'EOF'
+          > HongGuoEnhance 发布镜像。源码与构建过程见主仓库 (sourceUrl)。
+          > LSPosed 模块仓库经 module.prop 中的 versionCode 识别更新。
+          EOF
+          )
+          gh release create "$TAG" --repo "$LSPOSED_REPO" --title "$TAG" --notes "$NOTES" \
+            dist/HongGuoEnhance-*.apk \
+            || { echo "LSPosed 仓库 Release 已存在, 改为覆盖上传"; gh release upload "$TAG" --repo "$LSPOSED_REPO" --clobber dist/HongGuoEnhance-*.apk; }
