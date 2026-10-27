@@ -29,7 +29,7 @@ import org.json.JSONObject
 object LogStore {
     private const val TAG = HookEntry.TAG
     private const val DB_NAME = "hge_logs.db"
-    private const val DB_VERSION = 1
+    private const val DB_VERSION = 2
 
     /** 清理检查最小间隔：避免每次追加都全表扫描。 */
     private const val RETENTION_CHECK_INTERVAL_MS = 60 * 60 * 1000L
@@ -65,7 +65,8 @@ object LogStore {
                     "time INTEGER NOT NULL," +
                     "base_count INTEGER NOT NULL DEFAULT 0," +
                     "request TEXT," +
-                    "response TEXT)"
+                    "response TEXT," +
+                    "tags TEXT)"
             )
             db.execSQL("CREATE INDEX idx_ai_series ON ai_log(series_id, _id)")
             db.execSQL(
@@ -78,11 +79,10 @@ object LogStore {
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            // v1 起步；后续版本在此迁移
-            listOf("series", "comment", "ai_log", "error_log").forEach {
-                db.execSQL("DROP TABLE IF EXISTS $it")
+            // v2：ai_log 增加 tags 结构化列（词条持久缓存，跨 app 重启复用）
+            if (oldVersion < 2) {
+                db.execSQL("ALTER TABLE ai_log ADD COLUMN tags TEXT")
             }
-            onCreate(db)
         }
     }
 
@@ -188,8 +188,8 @@ object LogStore {
             try {
                 touchSeries(w, seriesId, null, now)
                 w.execSQL(
-                    "INSERT INTO ai_log(series_id, time, base_count, request, response) VALUES(?,?,?,?,?)",
-                    arrayOf(seriesId, now, baseCount, request, response)
+                    "INSERT INTO ai_log(series_id, time, base_count, request, response, tags) VALUES(?,?,?,?,?,?)",
+                    arrayOf(seriesId, now, baseCount, request, response, arr.toString())
                 )
                 w.setTransactionSuccessful()
             } finally {
@@ -200,8 +200,58 @@ object LogStore {
         }
     }
 
-    fun appendError(seriesId: String, msg: String) {
-        val d = db() ?: return
+    // ---------------------------------------------------------------- 回读（词条持久缓存）
+
+    /** 可跨 app 重启复用的历史总结。 */
+    class CachedSummary(val tags: List<AiClient.Tag>, val baseCount: Int, val time: Long)
+
+    /**
+     * 读取该剧最近一次结构化落库的词条总结（无则 null）。
+     * 供 Pipeline 在内存缓存未命中时恢复，避免重复调用 AI。
+     */
+    fun loadLatestSummary(seriesId: String): CachedSummary? {
+        val d = db() ?: return null
+        return try {
+            d.readableDatabase.rawQuery(
+                "SELECT tags, base_count, time FROM ai_log " +
+                    "WHERE series_id=? AND tags IS NOT NULL ORDER BY _id DESC LIMIT 1",
+                arrayOf(seriesId)
+            ).use { c ->
+                if (!c.moveToFirst()) return null
+                val tagsJson = c.getString(0) ?: return null
+                val arr = JSONArray(tagsJson)
+                val tags = ArrayList<AiClient.Tag>(arr.length())
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    tags.add(AiClient.Tag(o.getString("tag"), o.getInt("count")))
+                }
+                CachedSummary(tags, c.getInt(1), c.getLong(2))
+            }
+        } catch (t: Throwable) {
+            Logger.e("log loadLatestSummary failed: $seriesId", t)
+            null
+        }
+    }
+
+    /** 读取该剧历史上全部"已交给 AI"的评论文本（按采集顺序），供恢复会话后"继续加载"累计总结。 */
+    fun loadUsedComments(seriesId: String): List<String> {
+        val d = db() ?: return emptyList()
+        return try {
+            val out = ArrayList<String>()
+            d.readableDatabase.rawQuery(
+                "SELECT text FROM comment WHERE series_id=? AND used=1 ORDER BY _id",
+                arrayOf(seriesId)
+            ).use { c ->
+                while (c.moveToNext()) out.add(c.getString(0))
+            }
+            out
+        } catch (t: Throwable) {
+            Logger.e("log loadUsedComments failed: $seriesId", t)
+            emptyList()
+        }
+    }
+
+    fun appendError(seriesId: String, msg: String) {        val d = db() ?: return
         try {
             val now = System.currentTimeMillis()
             val w = d.writableDatabase

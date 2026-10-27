@@ -49,9 +49,25 @@ Content-Type: application/json
 
 - **首次**：点分享 → 采集完成（≥50 条或无更多）→ 自动调用 AI；
 - **继续加载**：追加下一批评论后，用**全部累计评论**重新调用 AI
-  （全量重总结实现简单且结果一致，评论 50~100 条时 token 开销可接受）；
-- 词条结果缓存于 `Pipeline.SeriesCache.tags`（按 seriesId），
-  再次点分享同一部剧时直接展示，不重复请求。
+  （全量重总结实现简单且结果一致，评论 50~100 条时 token 开销可接受）。
+
+## 词条持久缓存（跨 app 重启）
+
+词条结果有两级缓存，命中即不调用 AI：
+
+1. **内存级**：`Pipeline.SeriesCache.tags`（按 seriesId）——
+   同一进程内再次点分享同一部剧直接展示；
+2. **持久级**（SQLite，跨 app 重启/杀后台有效）：
+   - 每次 AI 总结成功后，`LogStore.appendTags` 将词条以 JSON 结构化写入
+     宿主日志库 `hge_logs.db` 的 `ai_log.tags` 列（DB v2 起新增），
+     同时历史合格评论存于 `comment` 表（`used=1`）；
+   - 点分享时内存未命中，`Pipeline` 先查 `LogStore.loadLatestSummary(seriesId)`：
+     命中则恢复词条 + 历史评论（`loadUsedComments`），状态栏显示
+     **"基于 N 条剧评（历史缓存）"**，**全程不调用 AI**；未命中才发起采集与总结；
+   - 恢复会话后"继续加载"正常工作：新拉评论与历史评论文本去重后累计，
+     再全量重新总结（评论来自重放的首页时不会重复计数）；
+   - 清理联动：日志库按保留天数/大小上限清理时，对应剧的缓存词条随之删除
+     （`deleteSeries` 级联）。
 
 ## 超时与错误
 

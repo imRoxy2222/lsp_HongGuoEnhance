@@ -105,10 +105,37 @@ object Pipeline {
         activeDialog = java.lang.ref.WeakReference(dialog)
         dialog.show()
         if (cache.tags != null) {
-            // 已有词条缓存，直接展示
+            // 内存缓存命中，直接展示
             main.post { dialog.onTags(cache.tags!!, cache.comments.size) }
         } else if (cache.state == State.IDLE) {
-            startInitialCollect(seriesId)
+            // 内存未命中：先查本地日志库的历史总结（词条持久缓存），
+            // app 被杀后重启也能复用，避免重复调用 AI；无历史才发起采集
+            executor.execute {
+                val saved = try {
+                    LogStore.loadLatestSummary(seriesId)
+                } catch (t: Throwable) {
+                    Logger.w("load saved summary failed: ${t.message}")
+                    null
+                }
+                if (saved != null) {
+                    // 同步恢复历史评论（供"继续加载"累计总结）+ 历史词条
+                    if (cache.comments.isEmpty()) {
+                        cache.comments.addAll(LogStore.loadUsedComments(seriesId))
+                    }
+                    cache.tags = saved.tags
+                    cache.tagsFromCount = saved.baseCount
+                    cache.state = State.DONE
+                    cache.stateInfo = "基于 ${saved.baseCount} 条剧评（历史缓存）"
+                    LogStore.appendMeta(seriesId, cache.seriesName)
+                    Logger.i("summary restored from cache: $seriesId, tags=${saved.tags.size}")
+                    main.post {
+                        dialog.onTags(saved.tags, cache.comments.size)
+                        dialog.onState(State.DONE, cache.stateInfo, cache.comments.size, cache.hasMore)
+                    }
+                } else {
+                    startInitialCollect(seriesId)
+                }
+            }
         }
     }
 
@@ -137,6 +164,8 @@ object Pipeline {
     fun loadMore(seriesId: String) {
         val cache = caches.getOrPut(seriesId) { SeriesCache(seriesId, SeriesIdHolder.nameOf(seriesId)) }
         if (cache.state == State.COLLECTING || cache.state == State.AI_PENDING) return
+        // 恢复会话后 cursor 可能从首页重拉，去重防止评论重复计数
+        val existing = HashSet(cache.comments)
         executor.execute {
             try {
                 updateState(seriesId, State.COLLECTING, "正在加载下一批剧评...")
@@ -144,13 +173,16 @@ object Pipeline {
                     updateState(seriesId, State.DONE, "剧评已全部加载完（${cache.comments.size} 条）")
                     return@execute
                 }
+                fun addDedup(texts: List<String>) {
+                    for (t in texts) if (existing.add(t)) cache.comments.add(t)
+                }
                 // 单批精确截断：本批新增合格评论总数不超过单批加载条数
                 val batchCap = ModuleConfig.pageCount()
                 var batchCount = 0
                 var page = CommentFetcher.fetchPage(seriesId, cache.cursor, batchCap)
                 val first = page.comments.take(batchCap - batchCount)
                 batchCount += first.size
-                cache.comments.addAll(first)
+                addDedup(first)
                 LogStore.appendComments(seriesId, page.all, page.used)
                 cache.cursor = page.cursor
                 cache.hasMore = page.hasMore
@@ -160,7 +192,7 @@ object Pipeline {
                     page = CommentFetcher.fetchPage(seriesId, page.cursor, batchCap)
                     val toAdd = page.comments.take(batchCap - batchCount)
                     batchCount += toAdd.size
-                    cache.comments.addAll(toAdd)
+                    addDedup(toAdd)
                     LogStore.appendComments(seriesId, page.all, page.used)
                     cache.cursor = page.cursor
                     cache.hasMore = page.hasMore
