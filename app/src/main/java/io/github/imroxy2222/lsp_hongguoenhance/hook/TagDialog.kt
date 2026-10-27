@@ -2,7 +2,11 @@ package io.github.imroxy2222.lsp_hongguoenhance.hook
 
 import android.app.Activity
 import android.app.Dialog
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
+import android.graphics.Paint
+import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
@@ -85,7 +89,7 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
             setPadding(0, dp(6f), 0, 0)
         })
 
-        // 词条容器（ScrollView 包裹）
+        // 词条容器（方案A：横向条形图，每行 = 词条名 | 条形 | ×N；ScrollView 包裹）
         tagContainer = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(12f), 0, dp(4f))
@@ -125,13 +129,17 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
         return root
     }
 
-    /** 词条列表渲染：按数量降序胶囊；状态行 = 统计（总x/参考y/平均得分z）+ 词条数。 */
+    /**
+     * 词条列表渲染（方案A：横向条形图）。
+     * 每行：词条名（固定宽，超长跑马灯滚动）+ 条形（长度∝count/maxCount）+ ×N。
+     */
     fun onTags(tags: List<AiClient.Tag>) {
         lastTags = tags
         activity.runOnUiThread {
             tagContainer.removeAllViews()
+            val maxCount = tags.maxOfOrNull { it.count }?.coerceAtLeast(1) ?: 1
             for (t in tags) {
-                tagContainer.addView(makeTagChip("${t.text} ×${t.count}"))
+                tagContainer.addView(makeTagRow(t.text, t.count, t.count.toFloat() / maxCount))
             }
             stateView.text = "${Pipeline.statsLine(seriesId)} · 共 ${tags.size} 个词条"
         }
@@ -153,27 +161,93 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
         }
     }
 
-    private fun makeTagChip(text: String): TextView {
-        val chip = TextView(context).apply {
+    /**
+     * 构建一行词条：
+     * [词条名 固定宽96dp，超长跑马灯滚动] [条形 weight=1，长度∝fraction] [×N]
+     */
+    private fun makeTagRow(text: String, count: Int, fraction: Float): View {
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        // 词条名：固定宽度，保证条形空间不被长词条压缩；超长时跑马灯滚动
+        val name = TextView(context).apply {
             this.text = text
-            textSize = 15f
+            textSize = 14f
             setTextColor(Color.WHITE)
-            setPadding(dp(14f), dp(8f), dp(14f), dp(8f))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(20f).toFloat()
-                setColor(Color.parseColor("#3A3A40"))
-            }
+            setSingleLine(true)
+            ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
+            marqueeRepeatLimit = -1 // 无限滚动
+            isSelected = true       // 触发跑马灯（短文本不会滚动，只有超长才滚）
         }
-        val lp = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply {
-            bottomMargin = dp(8f)
-            gravity = Gravity.START
+        row.addView(
+            name,
+            LinearLayout.LayoutParams(dp(72f), ViewGroup.LayoutParams.WRAP_CONTENT)
+        )
+
+        // 条形：自绘，填充宽度由 fraction 决定，无布局时机问题
+        val bar = BarView(context, fraction.coerceIn(0f, 1f))
+        row.addView(
+            bar,
+            LinearLayout.LayoutParams(0, dp(18f), 1f).apply { marginStart = dp(8f) }
+        )
+
+        // ×N
+        val countView = TextView(context).apply {
+            this.text = "×$count"
+            textSize = 13f
+            setTextColor(Color.parseColor("#9AA0A6"))
         }
-        chip.layoutParams = lp
-        return chip
+        row.addView(
+            countView,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { marginStart = dp(8f) }
+        )
+
+        return row.apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(10f) }
+        }
     }
 
     private fun dp(v: Float): Int = (v * context.resources.displayMetrics.density + 0.5f).toInt()
+}
+
+/**
+ * 横向条形（方案A）：深灰圆角轨道 + 按占比填充的青色圆角条。
+ * 自绘 View，无布局时机问题。
+ */
+private class BarView(context: android.content.Context, private val fraction: Float) :
+    View(context) {
+
+    private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#2E2E34")
+    }
+    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val radius: Float = dp(9f).toFloat()
+
+    private fun dp(v: Float): Int =
+        (v * context.resources.displayMetrics.density + 0.5f).toInt()
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        canvas.drawRoundRect(0f, 0f, w, h, radius, radius, trackPaint)
+        if (fraction > 0f) {
+            // 最低可见宽度：极小占比时也保留一个小圆头
+            val fillW = (w * fraction).coerceAtLeast(h)
+            fillPaint.shader = LinearGradient(
+                0f, 0f, fillW, 0f,
+                Color.parseColor("#00E676"), Color.parseColor("#B9FF66"),
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawRoundRect(0f, 0f, fillW, h, radius, radius, fillPaint)
+        }
+    }
 }
