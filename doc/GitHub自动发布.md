@@ -72,6 +72,22 @@ git push origin v<N>
 
 > ⚠️ 签名一旦对外发布就不要再换：Android 要求覆盖安装必须同签名，换签名 = 用户必须卸载重装。
 
+### 本地构建与 Release 同签名的包
+
+`app/build.gradle.kts` 仅在环境变量 `RELEASE_STORE_FILE` 存在时对 release 签名，本地直接跑 `installRelease` 会产出**未签名 APK**（无法安装）。要本地构建与 GitHub Release 完全同签名的包（Git Bash）：
+
+```bash
+export RELEASE_STORE_FILE=hongguo-release.jks   # 相对项目根目录解析, 也可用绝对路径
+export RELEASE_STORE_PASSWORD=你的库密码
+export RELEASE_KEY_ALIAS=hongguo
+export RELEASE_KEY_PASSWORD=你的key密码
+./gradlew :app:installRelease "-Dorg.gradle.java.home=C:/Users/Frank2222/.vfox/sdks/java"
+```
+
+- 本地 release 包 ↔ CI Release 包：同 jks，签名一致，可互相覆盖安装。
+- 任何包 ↔ debug 包（`installDebug` 或未配 secrets 时 CI 的产物）：签名冲突，不能覆盖安装。
+- keystore 文件（`.jks` / `.b64`）已在 `.gitignore` 中，放置于项目根目录不会被提交，但建议移到代码区外并备份。
+
 ## 同步发布到 LSPosed 模块仓库
 
 前提（对应你申请通过后 LSPosed 为你建的仓库）：
