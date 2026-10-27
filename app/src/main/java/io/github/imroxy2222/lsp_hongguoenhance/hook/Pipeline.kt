@@ -173,16 +173,21 @@ object Pipeline {
                     updateState(seriesId, State.DONE, "剧评已全部加载完（${cache.comments.size} 条）")
                     return@execute
                 }
-                fun addDedup(texts: List<String>) {
-                    for (t in texts) if (existing.add(t)) cache.comments.add(t)
+                fun addDedup(texts: List<String>): List<String> {
+                    val added = ArrayList<String>(texts.size)
+                    for (t in texts) if (existing.add(t)) {
+                        cache.comments.add(t)
+                        added.add(t)
+                    }
+                    return added
                 }
                 // 单批精确截断：本批新增合格评论总数不超过单批加载条数
                 val batchCap = ModuleConfig.pageCount()
                 var batchCount = 0
+                val batchTexts = ArrayList<String>()
                 var page = CommentFetcher.fetchPage(seriesId, cache.cursor, batchCap)
-                val first = page.comments.take(batchCap - batchCount)
-                batchCount += first.size
-                addDedup(first)
+                batchTexts.addAll(addDedup(page.comments.take(batchCap - batchCount)))
+                batchCount = batchTexts.size
                 LogStore.appendComments(seriesId, page.all, page.used)
                 cache.cursor = page.cursor
                 cache.hasMore = page.hasMore
@@ -191,14 +196,14 @@ object Pipeline {
                 while (page.comments.size < 5 && page.hasMore && retry < 2 && batchCount < batchCap) {
                     page = CommentFetcher.fetchPage(seriesId, page.cursor, batchCap)
                     val toAdd = page.comments.take(batchCap - batchCount)
-                    batchCount += toAdd.size
-                    addDedup(toAdd)
+                    batchTexts.addAll(addDedup(toAdd))
+                    batchCount = batchTexts.size
                     LogStore.appendComments(seriesId, page.all, page.used)
                     cache.cursor = page.cursor
                     cache.hasMore = page.hasMore
                     retry++
                 }
-                runAi(seriesId)
+                runAi(seriesId, batchTexts)
             } catch (t: Throwable) {
                 Logger.e("loadMore failed", t)
                 LogStore.appendError(seriesId, "加载失败：${t.message ?: t.javaClass.simpleName}")
@@ -242,30 +247,62 @@ object Pipeline {
         }
     }
 
-    private fun runAi(seriesId: String) {
+    /**
+     * AI 总结词条。
+     *
+     * @param newBatch "继续加载"时本批新增的评论文本；非 null 且已有旧词条时
+     * 走**增量模式**：只把新批次发给 AI（旧评论不重复消耗 token），
+     * 返回后与旧词条按文本合并 count、重新降序，得到与全量总结等价的累计结果。
+     */
+    private fun runAi(seriesId: String, newBatch: List<String>? = null) {
         val cache = caches[seriesId] ?: return
-        val comments = cache.comments.toList()
-        if (comments.isEmpty()) {
-            updateState(seriesId, State.ERROR, "没有符合条件的评论（需字数>20）")
+        val oldTags = cache.tags
+        val incremental = newBatch != null && !oldTags.isNullOrEmpty() && newBatch.isNotEmpty()
+        val toSummarize = if (incremental) newBatch!! else cache.comments.toList()
+        if (toSummarize.isEmpty()) {
+            if (incremental) {
+                // 无新增（如全部与历史重复）：保留旧词条直接结束
+                updateState(seriesId, State.DONE, "没有新增评论，保留原词条（${cache.comments.size} 条）")
+            } else {
+                updateState(seriesId, State.ERROR, "没有符合条件的评论（需字数>20）")
+            }
             return
         }
-        updateState(seriesId, State.AI_PENDING, "正在调用 AI 分析 ${comments.size} 条剧评...")
+        updateState(
+            seriesId, State.AI_PENDING,
+            if (incremental) "正在调用 AI 分析 ${toSummarize.size} 条新剧评（增量）..."
+            else "正在调用 AI 分析 ${toSummarize.size} 条剧评..."
+        )
         val result = try {
-            AiClient.summarize(comments, cache.seriesName)
+            AiClient.summarize(toSummarize, cache.seriesName)
         } catch (t: Throwable) {
             Logger.e("ai summarize failed", t)
             LogStore.appendError(seriesId, "AI 总结失败：${t.message ?: t.javaClass.simpleName}")
             updateState(seriesId, State.ERROR, "AI 总结失败：${t.message ?: t.javaClass.simpleName}")
             return
         }
-        cache.tags = result.tags
-        cache.tagsFromCount = comments.size
-        LogStore.appendTags(seriesId, result.tags, comments.size, result.request, result.response)
-        val tags = result.tags
+        // 增量模式：与旧词条合并计数（同名词条 count 相加），再按数量降序
+        val mergedTags: List<AiClient.Tag> = if (incremental) {
+            val merged = LinkedHashMap<String, Int>()
+            for (t in oldTags!!) merged[t.text] = (merged[t.text] ?: 0) + t.count
+            for (t in result.tags) merged[t.text] = (merged[t.text] ?: 0) + t.count
+            merged.entries
+                .map { AiClient.Tag(it.key, it.value) }
+                .sortedByDescending { it.count }
+        } else {
+            result.tags
+        }
+        cache.tags = mergedTags
+        cache.tagsFromCount = cache.comments.size
+        LogStore.appendTags(
+            seriesId, mergedTags, cache.comments.size, result.request, result.response
+        )
+        val tags = mergedTags
+        val total = cache.comments.size
         main.post {
-            updateState(seriesId, State.DONE, "基于 ${comments.size} 条剧评")
+            updateState(seriesId, State.DONE, "基于 $total 条剧评")
             activeDialog?.get()?.takeIf { it.seriesId == seriesId }?.let { d ->
-                d.onTags(tags, comments.size)
+                d.onTags(tags, total)
             }
         }
     }
