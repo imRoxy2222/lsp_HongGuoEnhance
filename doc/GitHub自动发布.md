@@ -99,6 +99,7 @@ git push origin v<N>
 
 | 现象 | 原因与处理 |
 | --- | --- |
+| Actions 报 `./gradlew: Permission denied` | Windows 提交的 `gradlew` 缺少可执行位（git 索引为 `100644`）。修复：`git update-index --chmod=+x gradlew` 后提交推送。注意：**旧 tag 指向的提交仍是坏权限，必须在新提交上重新打 tag**，重推旧 tag 会再次失败 |
 | 想重新发同一个 tag | 先删远端 tag 与 Release（`gh release delete v<N> --yes && git push origin :refs/tags/v<N>`），重新打 tag 推送；或 Action 会自动走"Release 已存在 → 覆盖上传 APK"分支 |
 | tag 与 versionCode 不一致告警 | 正常，仅提醒命名规范。仓库更新检测以 APK 内 versionCode 为准；但请保证新 tag 的 versionCode **大于**上一个，否则 LSPosed 管理器不会提示更新 |
 | 用户覆盖安装失败提示签名不一致 | 发布签名中途换过 keystore。固定 keystore 并从第一次发布起使用 |
