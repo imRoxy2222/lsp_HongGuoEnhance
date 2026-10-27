@@ -25,6 +25,12 @@ object Pipeline {
         var seriesName: String? = null,
     ) {
         val comments = Collections.synchronizedList(ArrayList<String>())
+        /** 全部采集过的评论文本（含被过滤丢弃的），用于运行期去重。 */
+        val rawSeen = HashSet<String>()
+        /** 总采集条数（含被过滤丢弃的，去重后）——状态栏的 x。 */
+        var rawCount: Int = 0
+        /** 已采集评论的评分总和（未评分计 0）——平均得分 z = scoreSum / rawCount。 */
+        var scoreSum: Double = 0.0
         var cursor: String? = null
         var hasMore: Boolean = true
         var state: State = State.IDLE
@@ -32,6 +38,25 @@ object Pipeline {
         var tags: List<AiClient.Tag>? = null
         /** 生成当前词条时使用的评论数（用于"继续加载"后判断是否需要重新总结） */
         var tagsFromCount: Int = -1
+    }
+
+    /** 状态栏统计行：总x条评论,参考y条,平均得分z。 */
+    fun statsLine(seriesId: String): String {
+        val cache = caches[seriesId] ?: return "暂无数据"
+        val avg = if (cache.rawCount > 0) cache.scoreSum / cache.rawCount else 0.0
+        return "总${cache.rawCount}条评论,参考${cache.comments.size}条," +
+                "平均得分${String.format(java.util.Locale.US, "%.1f", avg)}"
+    }
+
+    /** 累计一页的采集统计（按文本去重；重复评论不计条数、不计分）。 */
+    private fun accumulateRaw(cache: SeriesCache, page: CommentFetcher.Page) {
+        for (i in page.all.indices) {
+            val t = page.all[i]
+            if (cache.rawSeen.add(t)) {
+                cache.rawCount++
+                cache.scoreSum += page.scores.getOrNull(i)?.toDouble() ?: 0.0
+            }
+        }
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -106,7 +131,7 @@ object Pipeline {
         dialog.show()
         if (cache.tags != null) {
             // 内存缓存命中，直接展示
-            main.post { dialog.onTags(cache.tags!!, cache.comments.size) }
+            main.post { dialog.onTags(cache.tags!!) }
         } else if (cache.state == State.IDLE) {
             // 内存未命中：先查本地日志库的历史总结（词条持久缓存），
             // app 被杀后重启也能复用，避免重复调用 AI；无历史才发起采集
@@ -118,18 +143,30 @@ object Pipeline {
                     null
                 }
                 if (saved != null) {
-                    // 同步恢复历史评论（供"继续加载"累计总结）+ 历史词条
-                    if (cache.comments.isEmpty()) {
-                        cache.comments.addAll(LogStore.loadUsedComments(seriesId))
+                    // 一次性恢复会话：历史词条 + 已用评论 + 采集统计（x/z）+ 分页游标
+                    val session = try {
+                        LogStore.loadSessionState(seriesId)
+                    } catch (t: Throwable) {
+                        Logger.w("load session state failed: ${t.message}")
+                        null
+                    }
+                    if (session != null) {
+                        if (cache.comments.isEmpty()) {
+                            cache.comments.addAll(session.usedComments)
+                        }
+                        cache.rawSeen.addAll(session.rawTexts)
+                        if (cache.rawCount == 0) cache.rawCount = session.rawCount
+                        if (cache.scoreSum == 0.0) cache.scoreSum = session.scoreSum
+                        if (cache.cursor == null) cache.cursor = session.cursor
                     }
                     cache.tags = saved.tags
                     cache.tagsFromCount = saved.baseCount
                     cache.state = State.DONE
-                    cache.stateInfo = "基于 ${saved.baseCount} 条剧评（历史缓存）"
+                    cache.stateInfo = statsLine(seriesId)
                     LogStore.appendMeta(seriesId, cache.seriesName)
                     Logger.i("summary restored from cache: $seriesId, tags=${saved.tags.size}")
                     main.post {
-                        dialog.onTags(saved.tags, cache.comments.size)
+                        dialog.onTags(saved.tags)
                         dialog.onState(State.DONE, cache.stateInfo, cache.comments.size, cache.hasMore)
                     }
                 } else {
@@ -170,7 +207,7 @@ object Pipeline {
             try {
                 updateState(seriesId, State.COLLECTING, "正在加载下一批剧评...")
                 if (cache.cursor == null && cache.comments.isNotEmpty()) {
-                    updateState(seriesId, State.DONE, "剧评已全部加载完（${cache.comments.size} 条）")
+                    updateState(seriesId, State.DONE, "${statsLine(seriesId)}（剧评已全部加载完）")
                     return@execute
                 }
                 fun addDedup(texts: List<String>): List<String> {
@@ -188,7 +225,8 @@ object Pipeline {
                 var page = CommentFetcher.fetchPage(seriesId, cache.cursor, batchCap)
                 batchTexts.addAll(addDedup(page.comments.take(batchCap - batchCount)))
                 batchCount = batchTexts.size
-                LogStore.appendComments(seriesId, page.all, page.used)
+                accumulateRaw(cache, page)
+                LogStore.appendComments(seriesId, page.all, page.used, page.scores)
                 cache.cursor = page.cursor
                 cache.hasMore = page.hasMore
                 // 过滤后不足一批时继续补一页（最多再补 2 次）
@@ -198,11 +236,13 @@ object Pipeline {
                     val toAdd = page.comments.take(batchCap - batchCount)
                     batchTexts.addAll(addDedup(toAdd))
                     batchCount = batchTexts.size
-                    LogStore.appendComments(seriesId, page.all, page.used)
+                    accumulateRaw(cache, page)
+                    LogStore.appendComments(seriesId, page.all, page.used, page.scores)
                     cache.cursor = page.cursor
                     cache.hasMore = page.hasMore
                     retry++
                 }
+                LogStore.saveCursor(seriesId, cache.cursor)
                 runAi(seriesId, batchTexts)
             } catch (t: Throwable) {
                 Logger.e("loadMore failed", t)
@@ -223,7 +263,8 @@ object Pipeline {
                 // 精确截断：首次采集 target 是"恰好 N 条"语义，
                 // 页内合格数可能超过剩余缺口（如 target=10、页 count=30），按缺口截取
                 cache.comments.addAll(page.comments.take(target))
-                LogStore.appendComments(seriesId, page.all, page.used)
+                accumulateRaw(cache, page)
+                LogStore.appendComments(seriesId, page.all, page.used, page.scores)
                 cache.cursor = page.cursor
                 cache.hasMore = page.hasMore
                 var rounds = 0
@@ -233,11 +274,13 @@ object Pipeline {
                     // 只补足缺口，多余合格评论留待"继续加载"（避免 9+2=11 超量发给 AI）
                     val remaining = target - cache.comments.size
                     cache.comments.addAll(page.comments.take(remaining))
-                    LogStore.appendComments(seriesId, page.all, page.used)
+                    accumulateRaw(cache, page)
+                    LogStore.appendComments(seriesId, page.all, page.used, page.scores)
                     cache.cursor = page.cursor
                     cache.hasMore = page.hasMore
                     rounds++
                 }
+                LogStore.saveCursor(seriesId, cache.cursor)
                 runAi(seriesId)
             } catch (t: Throwable) {
                 Logger.e("initial collect failed", t)
@@ -298,11 +341,10 @@ object Pipeline {
             seriesId, mergedTags, cache.comments.size, result.request, result.response
         )
         val tags = mergedTags
-        val total = cache.comments.size
         main.post {
-            updateState(seriesId, State.DONE, "基于 $total 条剧评")
+            updateState(seriesId, State.DONE, statsLine(seriesId))
             activeDialog?.get()?.takeIf { it.seriesId == seriesId }?.let { d ->
-                d.onTags(tags, total)
+                d.onTags(tags)
             }
         }
     }

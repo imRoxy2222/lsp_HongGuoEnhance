@@ -41,7 +41,7 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
         super.show()
         // 已有缓存则立即渲染
         Pipeline.cacheOf(seriesId)?.let { c ->
-            c.tags?.let { onTags(it, c.comments.size) }
+            c.tags?.let { onTags(it) }
             onState(c.state, c.stateInfo, c.comments.size, c.hasMore)
         }
     }
@@ -125,15 +125,15 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
         return root
     }
 
-    /** 词条列表渲染：按数量降序胶囊。 */
-    fun onTags(tags: List<AiClient.Tag>, commentsCount: Int) {
+    /** 词条列表渲染：按数量降序胶囊；状态行 = 统计（总x/参考y/平均得分z）+ 词条数。 */
+    fun onTags(tags: List<AiClient.Tag>) {
         lastTags = tags
         activity.runOnUiThread {
             tagContainer.removeAllViews()
             for (t in tags) {
                 tagContainer.addView(makeTagChip("${t.text} ×${t.count}"))
             }
-            stateView.text = "基于 $commentsCount 条剧评 · 共 ${tags.size} 个词条"
+            stateView.text = "${Pipeline.statsLine(seriesId)} · 共 ${tags.size} 个词条"
         }
     }
 
@@ -143,7 +143,7 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
                 Pipeline.State.IDLE -> info.ifEmpty { "就绪" }
                 Pipeline.State.COLLECTING -> "$info（已采集 $commentsCount 条）"
                 Pipeline.State.AI_PENDING -> info
-                Pipeline.State.DONE -> info.ifEmpty { "完成 · $commentsCount 条剧评" }
+                Pipeline.State.DONE -> info.ifEmpty { "${Pipeline.statsLine(seriesId)} · 完成" }
                 Pipeline.State.ERROR -> info
             }
             loadMoreBtn.visibility =

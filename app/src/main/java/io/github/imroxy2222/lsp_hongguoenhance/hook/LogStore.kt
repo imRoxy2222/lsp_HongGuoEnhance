@@ -29,7 +29,7 @@ import org.json.JSONObject
 object LogStore {
     private const val TAG = HookEntry.TAG
     private const val DB_NAME = "hge_logs.db"
-    private const val DB_VERSION = 2
+    private const val DB_VERSION = 3
 
     /** 清理检查最小间隔：避免每次追加都全表扫描。 */
     private const val RETENTION_CHECK_INTERVAL_MS = 60 * 60 * 1000L
@@ -47,7 +47,8 @@ object LogStore {
                     "series_id TEXT PRIMARY KEY NOT NULL," +
                     "name TEXT," +
                     "created INTEGER NOT NULL," +
-                    "last_update INTEGER NOT NULL)"
+                    "last_update INTEGER NOT NULL," +
+                    "cursor TEXT)"
             )
             db.execSQL(
                 "CREATE TABLE comment(" +
@@ -55,7 +56,8 @@ object LogStore {
                     "series_id TEXT NOT NULL," +
                     "time INTEGER NOT NULL," +
                     "text TEXT NOT NULL," +
-                    "used INTEGER NOT NULL DEFAULT 0)"
+                    "used INTEGER NOT NULL DEFAULT 0," +
+                    "score REAL)"
             )
             db.execSQL("CREATE INDEX idx_comment_series ON comment(series_id, _id)")
             db.execSQL(
@@ -82,6 +84,11 @@ object LogStore {
             // v2：ai_log 增加 tags 结构化列（词条持久缓存，跨 app 重启复用）
             if (oldVersion < 2) {
                 db.execSQL("ALTER TABLE ai_log ADD COLUMN tags TEXT")
+            }
+            // v3：comment 增加评分列（平均得分统计）；series 增加分页游标（恢复会话续拉）
+            if (oldVersion < 3) {
+                db.execSQL("ALTER TABLE comment ADD COLUMN score REAL")
+                db.execSQL("ALTER TABLE series ADD COLUMN cursor TEXT")
             }
         }
     }
@@ -141,8 +148,14 @@ object LogStore {
      * 写入一批抓取到的评论（全部，含被过滤丢弃的）。
      * @param texts 评论文本列表
      * @param used  与 texts 一一对应：true = 通过长度过滤、已进入 AI 输入
+     * @param scores 与 texts 一一对应：评分（reply.expand.score），未评分为 null
      */
-    fun appendComments(seriesId: String, texts: List<String>, used: List<Boolean>) {
+    fun appendComments(
+        seriesId: String,
+        texts: List<String>,
+        used: List<Boolean>,
+        scores: List<Float?> = emptyList(),
+    ) {
         if (texts.isEmpty()) return
         val d = db() ?: return
         try {
@@ -151,13 +164,17 @@ object LogStore {
             w.beginTransaction()
             try {
                 touchSeries(w, seriesId, null, now)
-                val stmt = w.compileStatement("INSERT INTO comment(series_id, time, text, used) VALUES(?,?,?,?)")
+                val stmt = w.compileStatement(
+                    "INSERT INTO comment(series_id, time, text, used, score) VALUES(?,?,?,?,?)"
+                )
                 for (i in texts.indices) {
                     stmt.clearBindings()
                     stmt.bindString(1, seriesId)
                     stmt.bindLong(2, now)
                     stmt.bindString(3, texts[i])
                     stmt.bindLong(4, if (i < used.size && used[i]) 1L else 0L)
+                    val s = if (i < scores.size) scores[i] else null
+                    if (s != null) stmt.bindDouble(5, s.toDouble()) else stmt.bindNull(5)
                     stmt.executeInsert()
                 }
                 w.setTransactionSuccessful()
@@ -205,6 +222,64 @@ object LogStore {
     /** 可跨 app 重启复用的历史总结。 */
     class CachedSummary(val tags: List<AiClient.Tag>, val baseCount: Int, val time: Long)
 
+    /** 持久化分页游标：恢复会话后"继续加载"能从正确位置续拉。 */
+    fun saveCursor(seriesId: String, cursor: String?) {
+        val d = db() ?: return
+        try {
+            d.writableDatabase.execSQL(
+                "UPDATE series SET cursor=? WHERE series_id=?",
+                arrayOf(cursor, seriesId)
+            )
+        } catch (t: Throwable) {
+            Logger.e("log saveCursor failed: $seriesId", t)
+        }
+    }
+
+    /** 恢复会话所需的全部状态（配合 [loadLatestSummary] 使用）。 */
+    class SessionState(
+        val usedComments: List<String>,  // 已交给 AI 的评论文本（按采集顺序）
+        val rawTexts: Set<String>,       // 全部采集过的文本（含被过滤的，供运行期去重）
+        val rawCount: Int,               // 总采集条数
+        val scoreSum: Double,            // 评分总和（未评分评论计 0）
+        val cursor: String?,             // 分页游标
+    )
+
+    /** 一次性回读会话状态：评论/去重集/统计/游标。库未初始化或无记录返回 null。 */
+    fun loadSessionState(seriesId: String): SessionState? {
+        val d = db() ?: return null
+        return try {
+            var exists = false
+            val usedComments = ArrayList<String>()
+            val rawTexts = HashSet<String>()
+            var rawCount = 0
+            var scoreSum = 0.0
+            d.readableDatabase.rawQuery(
+                "SELECT text, used, score FROM comment WHERE series_id=? ORDER BY _id",
+                arrayOf(seriesId)
+            ).use { c ->
+                while (c.moveToNext()) {
+                    exists = true
+                    val text = c.getString(0)
+                    rawTexts.add(text)
+                    rawCount++
+                    if (c.getInt(1) == 1) usedComments.add(text)
+                    if (!c.isNull(2)) scoreSum += c.getDouble(2)
+                }
+            }
+            if (!exists) return null
+            var cursor: String? = null
+            d.readableDatabase.rawQuery(
+                "SELECT cursor FROM series WHERE series_id=?", arrayOf(seriesId)
+            ).use { c ->
+                if (c.moveToFirst()) cursor = c.getString(0)
+            }
+            SessionState(usedComments, rawTexts, rawCount, scoreSum, cursor)
+        } catch (t: Throwable) {
+            Logger.e("log loadSessionState failed: $seriesId", t)
+            null
+        }
+    }
+
     /**
      * 读取该剧最近一次结构化落库的词条总结（无则 null）。
      * 供 Pipeline 在内存缓存未命中时恢复，避免重复调用 AI。
@@ -230,24 +305,6 @@ object LogStore {
         } catch (t: Throwable) {
             Logger.e("log loadLatestSummary failed: $seriesId", t)
             null
-        }
-    }
-
-    /** 读取该剧历史上全部"已交给 AI"的评论文本（按采集顺序），供恢复会话后"继续加载"累计总结。 */
-    fun loadUsedComments(seriesId: String): List<String> {
-        val d = db() ?: return emptyList()
-        return try {
-            val out = ArrayList<String>()
-            d.readableDatabase.rawQuery(
-                "SELECT text FROM comment WHERE series_id=? AND used=1 ORDER BY _id",
-                arrayOf(seriesId)
-            ).use { c ->
-                while (c.moveToNext()) out.add(c.getString(0))
-            }
-            out
-        } catch (t: Throwable) {
-            Logger.e("log loadUsedComments failed: $seriesId", t)
-            emptyList()
         }
     }
 
