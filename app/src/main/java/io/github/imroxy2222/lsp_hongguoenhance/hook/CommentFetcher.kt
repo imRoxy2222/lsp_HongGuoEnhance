@@ -94,9 +94,24 @@ object CommentFetcher {
         setField(clzReq, request, "cursor", cursor)
         setField(clzReq, request, "sort", enumOf(cl, "com.dragon.read.saas.ugc.model.UgcSortEnum", "SmartHot"))
         setField(clzReq, request, "groupType", enumOf(cl, "com.dragon.read.saas.ugc.model.UgcRelativeType", "Book"))
-        setField(clzReq, request, "commentType", enumOf(cl, "com.dragon.read.saas.ugc.model.UgcCommentGroupTypeOutter", "Book"))
-        setField(clzReq, request, "commentSource", enumOf(cl, "com.dragon.read.saas.ugc.model.UgcCommentSourceEnum", "NovelBookComment"))
-        setField(clzReq, request, "serverChannel", enumOf(cl, "com.dragon.read.saas.ugc.model.UgcCommentChannelEnum", "NovelPlayletCommentInnerList"))
+        setField(
+            clzReq,
+            request,
+            "commentType",
+            enumOf(cl, "com.dragon.read.saas.ugc.model.UgcCommentGroupTypeOutter", "Book")
+        )
+        setField(
+            clzReq,
+            request,
+            "commentSource",
+            enumOf(cl, "com.dragon.read.saas.ugc.model.UgcCommentSourceEnum", "NovelBookComment")
+        )
+        setField(
+            clzReq,
+            request,
+            "serverChannel",
+            enumOf(cl, "com.dragon.read.saas.ugc.model.UgcCommentChannelEnum", "NovelPlayletCommentInnerList")
+        )
 
         val bizParam = clzCommentBusinessParam.getDeclaredConstructor()
             .apply { isAccessible = true }.newInstance()
@@ -261,7 +276,7 @@ object CommentFetcher {
             val t = text.trim()
             if (t.isEmpty()) continue
             all.add(t)
-            usedFlags.add(t.length > 20)
+            usedFlags.add(t.length > 10)
         }
         val texts = all.filterIndexed { i, _ -> usedFlags[i] }
         Logger.i("page fetched: raw=${dataList.size}, got=${all.size}, filtered=${texts.size}, hasMore=$hasMore")
@@ -281,8 +296,8 @@ object CommentFetcher {
             val header = getField(response, "header")
             Logger.i(
                 "comment response diagnostics: " +
-                    "code=$codeStr, message=$message, debugInfo=$debugInfo, " +
-                    "logID=$logId, header=$header"
+                        "code=$codeStr, message=$message, debugInfo=$debugInfo, " +
+                        "logID=$logId, header=$header"
             )
         }.onFailure { Logger.w("dumpDiagnostics failed: ${it.message}") }
     }

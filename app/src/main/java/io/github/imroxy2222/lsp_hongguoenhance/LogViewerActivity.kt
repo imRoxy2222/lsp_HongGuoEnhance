@@ -81,6 +81,14 @@ private data class SeriesLog(
 /** AI 回复解析失败等场景的 KV 行。 */
 private typealias Kv = List<Pair<String, String>>
 
+// ---------------------------------------------------------------- 常量与缓存（避免每帧重复分配）
+
+/** 时间格式化器缓存（仅 UI 线程使用；SimpleDateFormat 非线程安全但此处单线程）。 */
+private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+private val itemShape = RoundedCornerShape(8.dp)
+private val barShape = RoundedCornerShape(2.dp)
+private val listPadding = PaddingValues(16.dp)
+
 // ---------------------------------------------------------------- Root 直读（优先通道）
 
 /**
@@ -676,22 +684,37 @@ class LogViewerActivity : ComponentActivity() {
                 }
                 return@Scaffold
             }
+            // 分组统计预计算一次（条数 / 交给 AI 条数），不要在渲染时 filter
+            val batchStats = remember(log.comments) {
+                HashMap<Long, IntArray>().also { m ->
+                    log.comments.forEach { r ->
+                        val a = m.getOrPut(r.time) { IntArray(2) }
+                        a[0]++
+                        if (r.used) a[1]++
+                    }
+                }
+            }
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                contentPadding = listPadding,
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // 同一批采集（时间戳相同）的评论归到一个小节标题下
-                var lastTime = -1L
-                itemsIndexed(log.comments, key = { i, _ -> "c$i" }) { i, rec ->
-                    if (rec.time != lastTime) {
-                        lastTime = rec.time
-                        val batch = log.comments.filter { it.time == rec.time }
-                        val usedCount = batch.count { it.used }
+                // 同一批采集（时间戳相同）的评论归到一个小节标题下。
+                // 注意：分组起点必须从数据确定性判断（当前条与上一条时间不同），
+                // 不能用组合期可变变量推进——LazyColumn 只组合可见项、滚动时
+                // 会按任意顺序/批次重组条目，可变变量会导致标题重复出现。
+                itemsIndexed(
+                    log.comments,
+                    key = { i, _ -> "c$i" },
+                    contentType = { _, _ -> "comment" }
+                ) { i, rec ->
+                    val batchStart = i == 0 || log.comments[i - 1].time != rec.time
+                    if (batchStart) {
+                        val stats = batchStats[rec.time] ?: IntArray(2)
                         Text(
-                            "采集 ${batch.size} 条 · 交给 AI $usedCount 条 · ${formatTime(rec.time)}",
+                            "采集 ${stats[0]} 条 · 交给 AI ${stats[1]} 条 · ${formatTime(rec.time)}",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(top = if (i == 0) 0.dp else 8.dp)
@@ -712,7 +735,8 @@ class LogViewerActivity : ComponentActivity() {
     @Composable
     private fun CommentItem(rec: CommentRec) {
         var expanded by remember(rec.text) { mutableStateOf(false) }
-        var textHeightPx by remember(rec.text) { mutableStateOf(0) }
+        // IntState：避免每条评论布局时 Integer 装箱；仅本 item 读取，重组范围最小化
+        val textHeightPx = remember(rec.text) { mutableIntStateOf(0) }
         val density = LocalDensity.current
         val barWidth = (LocalConfiguration.current.screenWidthDp * 0.01f).dp
         val barColor = if (rec.used) Color(0xFF4CAF50) else Color(0xFFEF5350)
@@ -720,10 +744,7 @@ class LogViewerActivity : ComponentActivity() {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(
-                    MaterialTheme.colorScheme.surfaceVariant,
-                    RoundedCornerShape(8.dp)
-                )
+                .background(MaterialTheme.colorScheme.surfaceVariant, itemShape)
                 .clickable { expanded = !expanded }
                 .padding(8.dp),
             verticalAlignment = Alignment.Top
@@ -731,8 +752,8 @@ class LogViewerActivity : ComponentActivity() {
             Box(
                 modifier = Modifier
                     .width(barWidth)
-                    .height(with(density) { textHeightPx.toDp() })
-                    .background(barColor, RoundedCornerShape(2.dp))
+                    .height(with(density) { textHeightPx.intValue.toDp() })
+                    .background(barColor, barShape)
             )
             Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
@@ -742,7 +763,7 @@ class LogViewerActivity : ComponentActivity() {
                     lineHeight = 18.sp,
                     maxLines = if (expanded) Int.MAX_VALUE else 2,
                     overflow = TextOverflow.Ellipsis,
-                    onTextLayout = { textHeightPx = it.size.height }
+                    onTextLayout = { textHeightPx.intValue = it.size.height }
                 )
                 if (expanded) {
                     Spacer(Modifier.height(2.dp))
@@ -796,7 +817,7 @@ class LogViewerActivity : ComponentActivity() {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                contentPadding = listPadding,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 itemsIndexed(log.ai, key = { i, _ -> "ai$i" }) { _, rec ->
@@ -926,6 +947,6 @@ class LogViewerActivity : ComponentActivity() {
 
     private fun formatTime(ts: Long): String {
         if (ts <= 0) return "未知时间"
-        return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(ts))
+        return timeFormat.format(Date(ts))
     }
 }
