@@ -45,12 +45,61 @@ object Pipeline {
     fun onAppReady(xposed: io.github.libxposed.api.XposedInterface, cl: ClassLoader) {
         ModuleConfig.init(xposed)
         CommentFetcher.onAppReady(cl)
+        // 尽早拉起日志存储/服务（Application 可能尚未创建；失败则由下方 bootstrap 兜底）
+        runCatching {
+            val app = Class.forName("android.app.ActivityThread")
+                .getMethod("currentApplication").invoke(null) as? android.content.Context
+            if (app != null) {
+                Thread {
+                    runCatching { LogStore.init(app) }
+                    runCatching { LogServer.ensureStarted(app) }
+                }.start()
+            }
+        }
         Logger.i("pipeline ready")
+    }
+
+    /**
+     * 日志服务确定性拉起：hook Instrumentation.callApplicationOnCreate，
+     * 在红果 Application 创建的第一时间初始化存储并启动服务。
+     *
+     * 此前服务依赖"首次点击分享"拉起，若用户装完模块没点过分享，
+     * 查看日志页会全部"连接被拒绝"——本 hook 消除该依赖。
+     * （onPackageReady 时 currentApplication() 也可能为 null，此处为兜底。）
+     */
+    fun installLogBootstrap(xposed: io.github.libxposed.api.XposedInterface, cl: ClassLoader) {
+        try {
+            val m = android.app.Instrumentation::class.java.getDeclaredMethod(
+                "callApplicationOnCreate", android.app.Application::class.java
+            )
+            xposed.hook(m).intercept { chain ->
+                runCatching {
+                    val app = chain.getArg(0) as? android.app.Application
+                    if (app != null) {
+                        Thread {
+                            runCatching { LogStore.init(app) }
+                            runCatching { LogServer.ensureStarted(app) }
+                        }.start()
+                    }
+                }
+                chain.proceed()
+            }
+            Logger.i("hook instrumentation log bootstrap ok")
+        } catch (t: Throwable) {
+            Logger.e("hook instrumentation log bootstrap failed", t)
+        }
     }
 
     /** 分享按钮点击（已替换原分享面板）：打开词条页，无缓存时自动开始采集。 */
     fun onShareClicked(activity: Activity, seriesId: String) {
+        // 日志存储/服务兜底初始化（幂等；放到工作线程避免主线程 DB/文件 IO）
+        val appContext = activity.applicationContext
         val cache = caches.getOrPut(seriesId) { SeriesCache(seriesId, SeriesIdHolder.currentName) }
+        executor.execute {
+            runCatching { LogStore.init(appContext) }
+            runCatching { LogServer.ensureStarted(appContext) }
+            LogStore.appendMeta(seriesId, cache.seriesName)
+        }
         val dialog = TagDialog(activity, seriesId)
         activeDialog = java.lang.ref.WeakReference(dialog)
         dialog.show()
@@ -82,6 +131,7 @@ object Pipeline {
                 }
                 var page = CommentFetcher.fetchPage(seriesId, cache.cursor, ModuleConfig.pageCount())
                 cache.comments.addAll(page.comments)
+                LogStore.appendComments(seriesId, page.all, page.used)
                 cache.cursor = page.cursor
                 cache.hasMore = page.hasMore
                 // 过滤后不足一批时继续补一页（最多再补 2 次）
@@ -89,6 +139,7 @@ object Pipeline {
                 while (page.comments.size < 5 && page.hasMore && retry < 2) {
                     page = CommentFetcher.fetchPage(seriesId, page.cursor, ModuleConfig.pageCount())
                     cache.comments.addAll(page.comments)
+                    LogStore.appendComments(seriesId, page.all, page.used)
                     cache.cursor = page.cursor
                     cache.hasMore = page.hasMore
                     retry++
@@ -96,6 +147,7 @@ object Pipeline {
                 runAi(seriesId)
             } catch (t: Throwable) {
                 Logger.e("loadMore failed", t)
+                LogStore.appendError(seriesId, "加载失败：${t.message ?: t.javaClass.simpleName}")
                 updateState(seriesId, State.ERROR, "加载失败：${t.message ?: t.javaClass.simpleName}")
             }
         }
@@ -110,6 +162,7 @@ object Pipeline {
                 val target = ModuleConfig.targetCount()
                 var page = CommentFetcher.fetchPage(seriesId, null, ModuleConfig.pageCount())
                 cache.comments.addAll(page.comments)
+                LogStore.appendComments(seriesId, page.all, page.used)
                 cache.cursor = page.cursor
                 cache.hasMore = page.hasMore
                 var rounds = 0
@@ -117,6 +170,7 @@ object Pipeline {
                     notifyComments(seriesId, "正在采集剧评 ${cache.comments.size}/$target...")
                     page = CommentFetcher.fetchPage(seriesId, page.cursor, ModuleConfig.pageCount())
                     cache.comments.addAll(page.comments)
+                    LogStore.appendComments(seriesId, page.all, page.used)
                     cache.cursor = page.cursor
                     cache.hasMore = page.hasMore
                     rounds++
@@ -124,6 +178,7 @@ object Pipeline {
                 runAi(seriesId)
             } catch (t: Throwable) {
                 Logger.e("initial collect failed", t)
+                LogStore.appendError(seriesId, "采集失败：${t.message ?: t.javaClass.simpleName}")
                 updateState(seriesId, State.ERROR, "采集失败：${t.message ?: t.javaClass.simpleName}")
             }
         }
@@ -137,9 +192,18 @@ object Pipeline {
             return
         }
         updateState(seriesId, State.AI_PENDING, "正在调用 AI 分析 ${comments.size} 条剧评...")
-        val tags = AiClient.summarize(comments, cache.seriesName)
-        cache.tags = tags
+        val result = try {
+            AiClient.summarize(comments, cache.seriesName)
+        } catch (t: Throwable) {
+            Logger.e("ai summarize failed", t)
+            LogStore.appendError(seriesId, "AI 总结失败：${t.message ?: t.javaClass.simpleName}")
+            updateState(seriesId, State.ERROR, "AI 总结失败：${t.message ?: t.javaClass.simpleName}")
+            return
+        }
+        cache.tags = result.tags
         cache.tagsFromCount = comments.size
+        LogStore.appendTags(seriesId, result.tags, comments.size, result.request, result.response)
+        val tags = result.tags
         main.post {
             updateState(seriesId, State.DONE, "基于 ${comments.size} 条剧评")
             activeDialog?.get()?.takeIf { it.seriesId == seriesId }?.let { d ->

@@ -37,7 +37,9 @@ object CommentFetcher {
     private const val REQUEST_TIMEOUT_MS = 15_000L
 
     data class Page(
-        val comments: List<String>,   // 本页合格（长度过滤后）评论文本
+        val comments: List<String>,   // 本页合格（长度过滤后）评论文本，即交给 AI 的部分
+        val all: List<String>,        // 本页抓到的全部评论文本（含被过滤丢弃的）
+        val used: List<Boolean>,      // 与 all 一一对应：true = 通过过滤、进入 AI 输入
         val totalFetched: Int,        // 本页原始条数
         val cursor: String?,          // 下一页游标
         val hasMore: Boolean
@@ -244,7 +246,8 @@ object CommentFetcher {
         val cursor = info?.let { getField(it, "cursor") as? String }
         val hasMore = info?.let { getField(it, "hasMore") as? Boolean } ?: false
 
-        val texts = ArrayList<String>(dataList.size)
+        val all = ArrayList<String>(dataList.size)
+        val usedFlags = ArrayList<Boolean>(dataList.size)
         for (item in dataList) {
             if (item == null) continue
             val reply = getField(item, "reply")
@@ -256,10 +259,13 @@ object CommentFetcher {
                 ?: (getField(content, "srcContent") as? String)
                 ?: continue
             val t = text.trim()
-            if (t.length > 20) texts.add(t)
+            if (t.isEmpty()) continue
+            all.add(t)
+            usedFlags.add(t.length > 20)
         }
-        Logger.i("page fetched: raw=${dataList.size}, filtered=${texts.size}, hasMore=$hasMore")
-        return Page(texts, dataList.size, cursor, hasMore)
+        val texts = all.filterIndexed { i, _ -> usedFlags[i] }
+        Logger.i("page fetched: raw=${dataList.size}, got=${all.size}, filtered=${texts.size}, hasMore=$hasMore")
+        return Page(texts, all, usedFlags, dataList.size, cursor, hasMore)
     }
 
     /** dump 响应中的 code / message / debug_info / log_id / Header。 */

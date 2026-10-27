@@ -26,6 +26,7 @@ class HookEntry : XposedModule() {
         Logger.i("onPackageLoaded: ${param.packageName}")
         try {
             SharePanelHook.install(this, param.defaultClassLoader)
+            Pipeline.installLogBootstrap(this, param.defaultClassLoader)
             Logger.i("all hooks installed")
         } catch (t: Throwable) {
             Logger.e("install hooks failed", t)

@@ -1,5 +1,6 @@
 package io.github.imroxy2222.lsp_hongguoenhance
 
+import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -51,6 +52,7 @@ class MainActivity : ComponentActivity() {
             override fun onServiceBind(s: XposedService) {
                 service = s
                 serviceReady.value = true
+                ensureLogToken(s)
                 initialConfig.value = loadPrefs(s)
             }
 
@@ -98,12 +100,29 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                         },
-                        onSave = { baseUrl, apiKey, model, targetCount, pageCount, extraPrompt ->
-                            saveConfig(baseUrl, apiKey, model, targetCount, pageCount, extraPrompt)
+                        onSave = { baseUrl, apiKey, model, targetCount, pageCount, extraPrompt,
+                                   logRetentionDays, logMaxSizeMb ->
+                            saveConfig(
+                                baseUrl, apiKey, model, targetCount, pageCount, extraPrompt,
+                                logRetentionDays, logMaxSizeMb
+                            )
+                        },
+                        onOpenLogs = {
+                            startActivity(Intent(this, LogViewerActivity::class.java))
                         }
                     )
                 }
             }
+        }
+    }
+
+    /** 生成日志服务访问令牌（仅首次；宿主进程读取同一配置校验请求）。 */
+    private fun ensureLogToken(s: XposedService) {
+        val p = s.getRemotePreferences(ModuleConfig.PREFS_NAME)
+        if (p.getString(ModuleConfig.KEY_LOG_TOKEN, "").isNullOrEmpty()) {
+            p.edit()
+                .putString(ModuleConfig.KEY_LOG_TOKEN, java.util.UUID.randomUUID().toString())
+                .apply()
         }
     }
 
@@ -119,13 +138,20 @@ class MainActivity : ComponentActivity() {
             ModuleConfig.KEY_PAGE_COUNT to p.getInt(
                 ModuleConfig.KEY_PAGE_COUNT, ModuleConfig.DEFAULT_PAGE_COUNT
             ),
-            ModuleConfig.KEY_EXTRA_PROMPT to (p.getString(ModuleConfig.KEY_EXTRA_PROMPT, "") ?: "")
+            ModuleConfig.KEY_EXTRA_PROMPT to (p.getString(ModuleConfig.KEY_EXTRA_PROMPT, "") ?: ""),
+            ModuleConfig.KEY_LOG_RETENTION_DAYS to p.getInt(
+                ModuleConfig.KEY_LOG_RETENTION_DAYS, ModuleConfig.DEFAULT_LOG_RETENTION_DAYS
+            ),
+            ModuleConfig.KEY_LOG_MAX_SIZE_MB to p.getInt(
+                ModuleConfig.KEY_LOG_MAX_SIZE_MB, ModuleConfig.DEFAULT_LOG_MAX_SIZE_MB
+            )
         )
     }
 
     private fun saveConfig(
         baseUrl: String, apiKey: String, model: String,
         targetCount: Int, pageCount: Int, extraPrompt: String,
+        logRetentionDays: Int, logMaxSizeMb: Int,
     ) {
         val s = service
         if (s == null) {
@@ -140,6 +166,8 @@ class MainActivity : ComponentActivity() {
             .putInt(ModuleConfig.KEY_TARGET_COUNT, targetCount)
             .putInt(ModuleConfig.KEY_PAGE_COUNT, pageCount)
             .putString(ModuleConfig.KEY_EXTRA_PROMPT, extraPrompt)
+            .putInt(ModuleConfig.KEY_LOG_RETENTION_DAYS, logRetentionDays)
+            .putInt(ModuleConfig.KEY_LOG_MAX_SIZE_MB, logMaxSizeMb)
             .apply()
         Toast.makeText(this, "已保存，重启红果短剧后生效", Toast.LENGTH_SHORT).show()
     }
@@ -151,7 +179,8 @@ fun SettingsScreen(
     serviceReady: Boolean,
     initial: Map<String, Any>?,
     onScopeRequest: () -> Unit,
-    onSave: (String, String, String, Int, Int, String) -> Unit,
+    onSave: (String, String, String, Int, Int, String, Int, Int) -> Unit,
+    onOpenLogs: () -> Unit,
 ) {
     fun str(key: String, fallback: String): String {
         val v = initial?.get(key) as? String
@@ -170,6 +199,14 @@ fun SettingsScreen(
             ?: ModuleConfig.DEFAULT_PAGE_COUNT).toString())
     }
     var extraPrompt by remember(initial) { mutableStateOf(str(ModuleConfig.KEY_EXTRA_PROMPT, "")) }
+    var logRetentionDays by remember(initial) {
+        mutableStateOf(((initial?.get(ModuleConfig.KEY_LOG_RETENTION_DAYS) as? Int)
+            ?: ModuleConfig.DEFAULT_LOG_RETENTION_DAYS).toString())
+    }
+    var logMaxSizeMb by remember(initial) {
+        mutableStateOf(((initial?.get(ModuleConfig.KEY_LOG_MAX_SIZE_MB) as? Int)
+            ?: ModuleConfig.DEFAULT_LOG_MAX_SIZE_MB).toString())
+    }
 
     Column(
         modifier = modifier
@@ -238,6 +275,32 @@ fun SettingsScreen(
             minLines = 2
         )
 
+        Text("评论词条日志", style = MaterialTheme.typography.titleMedium)
+        OutlinedButton(onClick = onOpenLogs, modifier = Modifier.fillMaxWidth()) {
+            Text("查看日志（按剧分列）")
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedTextField(
+                value = logRetentionDays,
+                onValueChange = { logRetentionDays = it.filter { c -> c.isDigit() } },
+                label = { Text("保留天数（0=不限）") },
+                modifier = Modifier.weight(1f),
+                singleLine = true
+            )
+            OutlinedTextField(
+                value = logMaxSizeMb,
+                onValueChange = { logMaxSizeMb = it.filter { c -> c.isDigit() } },
+                label = { Text("总大小上限 MB（0=不限）") },
+                modifier = Modifier.weight(1f),
+                singleLine = true
+            )
+        }
+        Text(
+            "超过保留天数或总大小上限时，最旧的剧集日志将被自动删除。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
         Button(
             onClick = {
                 onSave(
@@ -246,7 +309,11 @@ fun SettingsScreen(
                     model.ifBlank { ModuleConfig.DEFAULT_MODEL },
                     targetCount.toIntOrNull()?.coerceIn(10, 200) ?: ModuleConfig.DEFAULT_TARGET_COUNT,
                     pageCount.toIntOrNull()?.coerceIn(5, 30) ?: ModuleConfig.DEFAULT_PAGE_COUNT,
-                    extraPrompt
+                    extraPrompt,
+                    logRetentionDays.toIntOrNull()?.coerceIn(0, 3650)
+                        ?: ModuleConfig.DEFAULT_LOG_RETENTION_DAYS,
+                    logMaxSizeMb.toIntOrNull()?.coerceIn(0, 4096)
+                        ?: ModuleConfig.DEFAULT_LOG_MAX_SIZE_MB
                 )
             },
             modifier = Modifier.fillMaxWidth()
