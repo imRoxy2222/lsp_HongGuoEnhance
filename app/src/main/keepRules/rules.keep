@@ -1,0 +1,23 @@
+# Add project specific R8 rules here.
+# AGP will combine all keep rule files in src/main/keepRules to pass to R8
+#
+# For more details, see
+#   https://d.android.com/r/tools/r8/keep-rules
+
+# libxposed 102：入口类经 META-INF/xposed/java_init.list 反射实例化，不可被混淆/裁剪
+-keep class io.github.imroxy2222.lsp_hongguoenhance.HookEntry { *; }
+-keep,allowoptimization,allowobfuscation public class * extends io.github.libxposed.api.XposedModule {
+    public <init>();
+}
+-dontwarn io.github.libxposed.annotation.**
+-adaptresourcefilecontents META-INF/xposed/java_init.list
+
+# 设置页通过 XposedServiceHelper 与框架通信，保留 service 相关入口
+-keep class io.github.libxposed.service.** { *; }
+
+# If your project uses WebView with JS, uncomment the following
+# and specify the fully qualified class name to the JavaScript interface
+# class:
+#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
+#   public *;
+#}
