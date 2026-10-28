@@ -24,13 +24,15 @@ object ModuleConfig {
     const val KEY_LOG_TOKEN = "log_token"         // 日志服务访问令牌（设置页生成，宿主校验）
     const val KEY_LOG_SERVER_STATUS = "log_server_status" // 宿主端服务状态上报（诊断用）
     const val KEY_LOG_DB_PATH = "log_db_path"     // 宿主端真实日志数据库路径上报（root 直读用）
+    const val KEY_DISABLE_THINKING = "disable_thinking" // AI 请求关闭思考模式（默认开启）
 
     const val DEFAULT_BASE_URL = "https://api.deepseek.com"
     const val DEFAULT_MODEL = "deepseek-flash"
     const val DEFAULT_TARGET_COUNT = 50
-    const val DEFAULT_PAGE_COUNT = 10
+    const val DEFAULT_PAGE_COUNT = 30
     const val DEFAULT_LOG_RETENTION_DAYS = 30
     const val DEFAULT_LOG_MAX_SIZE_MB = 100
+    const val DEFAULT_DISABLE_THINKING = true
 
     @Volatile
     private var prefs: SharedPreferences? = null
@@ -59,6 +61,10 @@ object ModuleConfig {
         p().getInt(KEY_PAGE_COUNT, DEFAULT_PAGE_COUNT).coerceIn(5, 30)
 
     fun extraPrompt(): String = p().getString(KEY_EXTRA_PROMPT, null).orEmpty()
+
+    /** AI 请求是否携带"关闭思考"字段（未配置时默认开启）。 */
+    fun disableThinking(): Boolean =
+        p().getBoolean(KEY_DISABLE_THINKING, DEFAULT_DISABLE_THINKING)
 
     fun logRetentionDays(): Int =
         p().getInt(KEY_LOG_RETENTION_DAYS, DEFAULT_LOG_RETENTION_DAYS).coerceIn(0, 3650)

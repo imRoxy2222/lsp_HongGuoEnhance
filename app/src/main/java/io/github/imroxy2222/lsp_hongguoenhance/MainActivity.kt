@@ -6,26 +6,48 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import io.github.imroxy2222.lsp_hongguoenhance.hook.ModuleConfig
 import io.github.imroxy2222.lsp_hongguoenhance.ui.theme.HongGuoEnhanceTheme
@@ -43,10 +65,13 @@ class MainActivity : ComponentActivity() {
     private var service: XposedService? = null
     private val serviceReady = mutableStateOf(false)
     private val initialConfig = mutableStateOf<Map<String, Any>?>(null)
+    private val launcherHidden = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        launcherHidden.value = LauncherVisibility.isHidden(this)
 
         XposedServiceHelper.registerListener(object : XposedServiceHelper.OnServiceListener {
             override fun onServiceBind(s: XposedService) {
@@ -64,54 +89,56 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             HongGuoEnhanceTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    SettingsScreen(
-                        modifier = Modifier.padding(innerPadding),
-                        serviceReady = serviceReady.value,
-                        initial = initialConfig.value,
-                        onScopeRequest = {
-                            val s = service
-                            if (s == null) {
-                                Toast.makeText(this, "框架服务未连接", Toast.LENGTH_SHORT).show()
-                            } else {
-                                s.requestScope(
-                                    listOf(HookEntry.TARGET_APP),
-                                    object : XposedService.OnScopeEventListener {
-                                        override fun onScopeRequestApproved(approved: List<String>) {
-                                            runOnUiThread {
-                                                Toast.makeText(
-                                                    this@MainActivity,
-                                                    "作用域申请成功，请重启红果短剧",
-                                                    Toast.LENGTH_LONG
-                                                ).show()
-                                            }
-                                        }
-
-                                        override fun onScopeRequestFailed(message: String) {
-                                            runOnUiThread {
-                                                Toast.makeText(
-                                                    this@MainActivity,
-                                                    "作用域申请失败: $message",
-                                                    Toast.LENGTH_LONG
-                                                ).show()
-                                            }
+                SettingsScreen(
+                    serviceReady = serviceReady.value,
+                    launcherHidden = launcherHidden.value,
+                    initial = initialConfig.value,
+                    onScopeRequest = {
+                        val s = service
+                        if (s == null) {
+                            Toast.makeText(this, "框架服务未连接", Toast.LENGTH_SHORT).show()
+                        } else {
+                            s.requestScope(
+                                listOf(HookEntry.TARGET_APP),
+                                object : XposedService.OnScopeEventListener {
+                                    override fun onScopeRequestApproved(approved: List<String>) {
+                                        runOnUiThread {
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "作用域申请成功，请重启红果短剧",
+                                                Toast.LENGTH_LONG
+                                            ).show()
                                         }
                                     }
-                                )
-                            }
-                        },
-                        onSave = { baseUrl, apiKey, model, targetCount, pageCount, extraPrompt,
-                                   logRetentionDays, logMaxSizeMb ->
-                            saveConfig(
-                                baseUrl, apiKey, model, targetCount, pageCount, extraPrompt,
-                                logRetentionDays, logMaxSizeMb
+
+                                    override fun onScopeRequestFailed(message: String) {
+                                        runOnUiThread {
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "作用域申请失败: $message",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    }
+                                }
                             )
-                        },
-                        onOpenLogs = {
-                            startActivity(Intent(this, LogViewerActivity::class.java))
                         }
-                    )
-                }
+                    },
+                    onSave = { baseUrl, apiKey, model, targetCount, pageCount, extraPrompt,
+                               logRetentionDays, logMaxSizeMb, disableThinking ->
+                        saveConfig(
+                            baseUrl, apiKey, model, targetCount, pageCount, extraPrompt,
+                            logRetentionDays, logMaxSizeMb, disableThinking
+                        )
+                    },
+                    onOpenLogs = {
+                        startActivity(Intent(this, LogViewerActivity::class.java))
+                    },
+                    onHideIconChange = { hide ->
+                        LauncherVisibility.setHidden(this, hide)
+                        launcherHidden.value = LauncherVisibility.isHidden(this)
+                    }
+                )
             }
         }
     }
@@ -144,6 +171,9 @@ class MainActivity : ComponentActivity() {
             ),
             ModuleConfig.KEY_LOG_MAX_SIZE_MB to p.getInt(
                 ModuleConfig.KEY_LOG_MAX_SIZE_MB, ModuleConfig.DEFAULT_LOG_MAX_SIZE_MB
+            ),
+            ModuleConfig.KEY_DISABLE_THINKING to p.getBoolean(
+                ModuleConfig.KEY_DISABLE_THINKING, ModuleConfig.DEFAULT_DISABLE_THINKING
             )
         )
     }
@@ -152,6 +182,7 @@ class MainActivity : ComponentActivity() {
         baseUrl: String, apiKey: String, model: String,
         targetCount: Int, pageCount: Int, extraPrompt: String,
         logRetentionDays: Int, logMaxSizeMb: Int,
+        disableThinking: Boolean,
     ) {
         val s = service
         if (s == null) {
@@ -168,19 +199,22 @@ class MainActivity : ComponentActivity() {
             .putString(ModuleConfig.KEY_EXTRA_PROMPT, extraPrompt)
             .putInt(ModuleConfig.KEY_LOG_RETENTION_DAYS, logRetentionDays)
             .putInt(ModuleConfig.KEY_LOG_MAX_SIZE_MB, logMaxSizeMb)
+            .putBoolean(ModuleConfig.KEY_DISABLE_THINKING, disableThinking)
             .apply()
         Toast.makeText(this, "已保存，重启红果短剧后生效", Toast.LENGTH_SHORT).show()
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    modifier: Modifier = Modifier,
     serviceReady: Boolean,
+    launcherHidden: Boolean,
     initial: Map<String, Any>?,
     onScopeRequest: () -> Unit,
-    onSave: (String, String, String, Int, Int, String, Int, Int) -> Unit,
+    onSave: (String, String, String, Int, Int, String, Int, Int, Boolean) -> Unit,
     onOpenLogs: () -> Unit,
+    onHideIconChange: (Boolean) -> Unit,
 ) {
     fun str(key: String, fallback: String): String {
         val v = initial?.get(key) as? String
@@ -203,6 +237,12 @@ fun SettingsScreen(
         )
     }
     var extraPrompt by remember(initial) { mutableStateOf(str(ModuleConfig.KEY_EXTRA_PROMPT, "")) }
+    var disableThinking by remember(initial) {
+        mutableStateOf(
+            (initial?.get(ModuleConfig.KEY_DISABLE_THINKING) as? Boolean)
+                ?: ModuleConfig.DEFAULT_DISABLE_THINKING
+        )
+    }
     var logRetentionDays by remember(initial) {
         mutableStateOf(
             ((initial?.get(ModuleConfig.KEY_LOG_RETENTION_DAYS) as? Int)
@@ -215,116 +255,342 @@ fun SettingsScreen(
                 ?: ModuleConfig.DEFAULT_LOG_MAX_SIZE_MB).toString()
         )
     }
+    var showHideConfirm by rememberSaveable { mutableStateOf(false) }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text("红果短剧增强 · 设置", style = MaterialTheme.typography.titleLarge)
-        Text(
-            if (serviceReady) "LSPosed 框架服务：已连接" else "LSPosed 框架服务：未连接（保存不可用）",
-            style = MaterialTheme.typography.bodySmall,
-            color = if (serviceReady) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.error
-        )
-
-        OutlinedButton(onClick = onScopeRequest, modifier = Modifier.fillMaxWidth()) {
-            Text("申请红果短剧作用域 (com.phoenix.read)")
-        }
-
-        Text("AI 接口配置（OpenAI 兼容）", style = MaterialTheme.typography.titleMedium)
-        OutlinedTextField(
-            value = baseUrl,
-            onValueChange = { baseUrl = it },
-            label = { Text("Base URL（如 https://api.deepseek.com）") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-        OutlinedTextField(
-            value = apiKey,
-            onValueChange = { apiKey = it },
-            label = { Text("API Key") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-        OutlinedTextField(
-            value = model,
-            onValueChange = { model = it },
-            label = { Text("模型名（如 deepseek-flash）") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-
-        Text("采集参数", style = MaterialTheme.typography.titleMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedTextField(
-                value = targetCount,
-                onValueChange = { targetCount = it.filter { c -> c.isDigit() } },
-                label = { Text("首次采集评论数") },
-                modifier = Modifier.weight(1f),
-                singleLine = true
-            )
-            OutlinedTextField(
-                value = pageCount,
-                onValueChange = { pageCount = it.filter { c -> c.isDigit() } },
-                label = { Text("单批加载条数") },
-                modifier = Modifier.weight(1f),
-                singleLine = true
+    Scaffold(
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = { Text("红果短剧增强 · 设置") },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
             )
         }
-        OutlinedTextField(
-            value = extraPrompt,
-            onValueChange = { extraPrompt = it },
-            label = { Text("附加提示词（可选）") },
-            modifier = Modifier.fillMaxWidth(),
-            minLines = 2
-        )
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(innerPadding)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // ── 框架服务状态 ────────────────────────────────────────────
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "LSPosed 框架服务",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Surface(
+                            shape = MaterialTheme.shapes.small,
+                            color = if (serviceReady) MaterialTheme.colorScheme.primaryContainer
+                            else MaterialTheme.colorScheme.errorContainer
+                        ) {
+                            Text(
+                                if (serviceReady) "已连接" else "未连接",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (serviceReady) MaterialTheme.colorScheme.onPrimaryContainer
+                                else MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        if (serviceReady) "配置读写可用" else "未检测到 LSPosed 服务，保存不可用；请确认已在 LSPosed 中启用本模块",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedButton(onClick = onScopeRequest, modifier = Modifier.fillMaxWidth()) {
+                        Text("申请红果短剧作用域 (com.phoenix.read)")
+                    }
+                }
+            }
 
-        Text("评论词条日志", style = MaterialTheme.typography.titleMedium)
-        OutlinedButton(onClick = onOpenLogs, modifier = Modifier.fillMaxWidth()) {
-            Text("查看日志（按剧分列）")
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedTextField(
-                value = logRetentionDays,
-                onValueChange = { logRetentionDays = it.filter { c -> c.isDigit() } },
-                label = { Text("保留天数（0=不限）") },
-                modifier = Modifier.weight(1f),
-                singleLine = true
-            )
-            OutlinedTextField(
-                value = logMaxSizeMb,
-                onValueChange = { logMaxSizeMb = it.filter { c -> c.isDigit() } },
-                label = { Text("总大小上限 MB（0=不限）") },
-                modifier = Modifier.weight(1f),
-                singleLine = true
-            )
-        }
-        Text(
-            "超过保留天数或总大小上限时，最旧的剧集日志将被自动删除。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+            // ── AI 接口配置 ────────────────────────────────────────────
+            SettingsSection(title = "AI 接口配置（OpenAI 兼容）") {
+                HelpField(
+                    title = "Base URL",
+                    help = "AI 接口基地址，需兼容 OpenAI Chat Completions 格式。\n例如：https://api.deepseek.com",
+                    value = baseUrl,
+                    onValueChange = { baseUrl = it },
+                    placeholder = "如 https://api.deepseek.com"
+                )
+                HelpField(
+                    title = "API Key",
+                    help = "AI 服务商提供的密钥，仅保存在本机配置中，用于调用接口时的身份鉴权。",
+                    value = apiKey,
+                    onValueChange = { apiKey = it },
+                    placeholder = "sk-..."
+                )
+                HelpField(
+                    title = "模型名",
+                    help = "请求 AI 接口时使用的模型名称。\n例如：deepseek-flash、gpt-4o-mini。",
+                    value = model,
+                    onValueChange = { model = it },
+                    placeholder = "如 deepseek-flash"
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("取消思考", style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.width(6.dp))
+                    HelpBadge(
+                        title = "取消思考",
+                        help = "开启后 AI 请求会同时携带各家的\"关闭思考\"字段，" +
+                            "不认识的字段会被服务端自动忽略，不影响请求。\n\n" +
+                            "可生效平台：DeepSeek、OpenRouter、通义/DashScope、智谱 GLM、" +
+                            "SiliconFlow、MiniMax、vLLM / SGLang 自部署等 OpenAI 兼容服务。\n" +
+                            "OpenAI 官方接口不识别这些字段（自动忽略，保持默认行为）。"
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Checkbox(
+                        checked = disableThinking,
+                        onCheckedChange = { disableThinking = it }
+                    )
+                }
+            }
 
-        Button(
-            onClick = {
-                onSave(
-                    baseUrl.ifBlank { ModuleConfig.DEFAULT_BASE_URL },
-                    apiKey,
-                    model.ifBlank { ModuleConfig.DEFAULT_MODEL },
-                    targetCount.toIntOrNull()?.coerceIn(10, 200) ?: ModuleConfig.DEFAULT_TARGET_COUNT,
-                    pageCount.toIntOrNull()?.coerceIn(5, 30) ?: ModuleConfig.DEFAULT_PAGE_COUNT,
-                    extraPrompt,
-                    logRetentionDays.toIntOrNull()?.coerceIn(0, 3650)
-                        ?: ModuleConfig.DEFAULT_LOG_RETENTION_DAYS,
-                    logMaxSizeMb.toIntOrNull()?.coerceIn(0, 4096)
-                        ?: ModuleConfig.DEFAULT_LOG_MAX_SIZE_MB
+            // ── 采集参数 ───────────────────────────────────────────────
+            SettingsSection(title = "采集参数") {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    HelpField(
+                        title = "首次采集评论数",
+                        help = "进入新剧后首次触发AI总结时,交给AI的有效评论数。\n范围 10 ~ 200，默认 50。",
+                        value = targetCount,
+                        onValueChange = { targetCount = it.filter { c -> c.isDigit() } },
+                        placeholder = "10 ~ 200，默认 50",
+                        modifier = Modifier.weight(1f)
+                    )
+                    HelpField(
+                        title = "单批加载条数",
+                        help = "每次加载评论的分批条数，批越大单次请求耗时越长。\n范围 5 ~ 30，默认 30。",
+                        value = pageCount,
+                        onValueChange = { pageCount = it.filter { c -> c.isDigit() } },
+                        placeholder = "5 ~ 30，默认 30",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                HelpField(
+                    title = "附加提示词",
+                    help = "可选。追加到系统提示词末尾的额外要求，用于自定义 AI 总结的风格与侧重点。",
+                    value = extraPrompt,
+                    onValueChange = { extraPrompt = it },
+                        placeholder = "可选，追加到系统提示词末尾",
+                        singleLine = false,
+                        minLines = 5
+                )
+            }
+
+            // ── 评论词条日志 ───────────────────────────────────────────
+            SettingsSection(title = "评论词条日志") {
+                OutlinedButton(onClick = onOpenLogs, modifier = Modifier.fillMaxWidth()) {
+                    Text("查看日志（按剧分列）")
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    HelpField(
+                        title = "保留天数",
+                        help = "日志保留天数，超过后最旧的剧集日志将被自动删除。\n填 0 表示不按天清理。范围 0 ~ 3650，默认 30。",
+                        value = logRetentionDays,
+                        onValueChange = { logRetentionDays = it.filter { c -> c.isDigit() } },
+                        placeholder = "0 = 不限，默认 30",
+                        modifier = Modifier.weight(1f)
+                    )
+                    HelpField(
+                        title = "总大小上限 MB",
+                        help = "日志数据库总大小上限，超出后最旧的剧集日志将被自动删除。\n填 0 表示不按大小清理。范围 0 ~ 4096，默认 100。",
+                        value = logMaxSizeMb,
+                        onValueChange = { logMaxSizeMb = it.filter { c -> c.isDigit() } },
+                        placeholder = "0 = 不限，默认 100",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Text(
+                    "超过保留天数或总大小上限时，最旧的剧集日志将被自动删除。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // ── 应用 ───────────────────────────────────────────────────
+            SettingsSection(title = "应用") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("隐藏桌面图标", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            if (launcherHidden) "已隐藏 · 可在 LSPosed 管理器中重新打开"
+                            else "隐藏后在 LSPosed 管理器中打开本模块",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = launcherHidden,
+                        onCheckedChange = { checked ->
+                            if (checked) showHideConfirm = true else onHideIconChange(false)
+                        }
+                    )
+                }
+            }
+
+            // ── 保存 ───────────────────────────────────────────────────
+            Button(
+                onClick = {
+                    onSave(
+                        baseUrl.ifBlank { ModuleConfig.DEFAULT_BASE_URL },
+                        apiKey,
+                        model.ifBlank { ModuleConfig.DEFAULT_MODEL },
+                        targetCount.toIntOrNull()?.coerceIn(10, 200)
+                            ?: ModuleConfig.DEFAULT_TARGET_COUNT,
+                        pageCount.toIntOrNull()?.coerceIn(5, 30)
+                            ?: ModuleConfig.DEFAULT_PAGE_COUNT,
+                        extraPrompt,
+                        logRetentionDays.toIntOrNull()?.coerceIn(0, 3650)
+                            ?: ModuleConfig.DEFAULT_LOG_RETENTION_DAYS,
+                        logMaxSizeMb.toIntOrNull()?.coerceIn(0, 4096)
+                            ?: ModuleConfig.DEFAULT_LOG_MAX_SIZE_MB,
+                        disableThinking
+                    )
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("保存配置") }
+
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+
+    if (showHideConfirm) {
+        AlertDialog(
+            onDismissRequest = { showHideConfirm = false },
+            title = { Text("隐藏桌面图标？") },
+            text = {
+                Text(
+                    "隐藏后将无法从桌面打开本应用。\n\n" +
+                            "重新打开方式：在 LSPosed 管理器的模块页面打开本模块。"
                 )
             },
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("保存配置") }
+            confirmButton = {
+                TextButton(onClick = {
+                    showHideConfirm = false
+                    onHideIconChange(true)
+                }) { Text("隐藏") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showHideConfirm = false }) { Text("取消") }
+            }
+        )
+    }
+}
+
+/** 带标题分组的设置区块（Material3 卡片样式）。 */
+@Composable
+private fun SettingsSection(
+    title: String,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            content()
+        }
+    }
+}
+
+/**
+ * 独立标题 + 输入框的设置项：标题行右方有 "?" 帮助徽标，
+ * 点击后弹出对话框说明该输入框的用途。
+ */
+@Composable
+private fun HelpField(
+    title: String,
+    help: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    placeholder: String = "",
+    singleLine: Boolean = true,
+    minLines: Int = 1,
+) {
+    Column(modifier = modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.width(6.dp))
+            HelpBadge(title = title, help = help)
+        }
+        Spacer(Modifier.height(6.dp))
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text(placeholder) },
+            singleLine = singleLine,
+            minLines = minLines,
+            shape = MaterialTheme.shapes.medium
+        )
+    }
+}
+
+/**
+ * 标题行右方的 "?" 帮助徽标：18dp 圆形 secondaryContainer 底色，
+ * 点击弹出对话框展示 [help] 说明文字。
+ */
+@Composable
+private fun HelpBadge(title: String, help: String) {
+    var showHelp by rememberSaveable { mutableStateOf(false) }
+
+    Box(
+        modifier = Modifier
+            .size(18.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .clickable { showHelp = true },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            "?",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSecondaryContainer
+        )
+    }
+
+    if (showHelp) {
+        AlertDialog(
+            onDismissRequest = { showHelp = false },
+            title = { Text(title) },
+            text = { Text(help) },
+            confirmButton = {
+                TextButton(onClick = { showHelp = false }) { Text("知道了") }
+            }
+        )
     }
 }

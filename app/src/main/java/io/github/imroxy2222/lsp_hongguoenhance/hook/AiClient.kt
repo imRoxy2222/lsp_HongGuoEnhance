@@ -39,7 +39,7 @@ object AiClient {
         val body = JSONObject().apply {
             put("model", ModuleConfig.model())
             put("temperature", 0.1) // 调低会让结果趋于稳定
-            putDisableThinking()
+            if (ModuleConfig.disableThinking()) putDisableThinking()
             put("messages", JSONArray().put(JSONObject().put("role", "system").put("content", systemPrompt)))
         }
         val msg = JSONObject().put("role", "user").put("content", userPrompt)
