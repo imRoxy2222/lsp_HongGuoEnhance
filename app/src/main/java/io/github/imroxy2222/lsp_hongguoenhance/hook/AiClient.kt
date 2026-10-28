@@ -39,6 +39,7 @@ object AiClient {
         val body = JSONObject().apply {
             put("model", ModuleConfig.model())
             put("temperature", 0.1) // 调低会让结果趋于稳定
+            putDisableThinking()
             put("messages", JSONArray().put(JSONObject().put("role", "system").put("content", systemPrompt)))
         }
         val msg = JSONObject().put("role", "user").put("content", userPrompt)
@@ -88,6 +89,24 @@ object AiClient {
         } finally {
             conn.disconnect()
         }
+    }
+
+    /**
+     * 关闭思考模式。OpenAI 兼容协议本身没有统一的"关闭思考"字段，
+     * 各家实现不一致，故同时携带多个常见字段，兼容服务端会忽略不认识的字段：
+     * - enable_thinking=false                            通义/DashScope、SiliconFlow、MiniMax 等
+     * - thinking={"type":"disabled"}                     DeepSeek 官方（api-docs/guides/thinking_mode）、智谱 GLM 等
+     * - reasoning={"enabled":false,"effort":"none"}       DeepSeek 官方（effort=none 即关闭）与
+     *                                                    OpenRouter（enabled=false）两种形状并存
+     * - chat_template_kwargs={"enable_thinking":false}   vLLM / SGLang 自部署
+     */
+    private fun JSONObject.putDisableThinking() {
+        put("enable_thinking", false)
+        put("thinking", JSONObject().put("type", "disabled"))
+        put("reasoning", JSONObject()
+            .put("enabled", false)
+            .put("effort", "none"))
+        put("chat_template_kwargs", JSONObject().put("enable_thinking", false))
     }
 
     private fun buildSystemPrompt(): String {

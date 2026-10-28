@@ -18,6 +18,10 @@ Content-Type: application/json
 {
   "model": "{model}",
   "temperature": 0.4,
+  "enable_thinking": false,
+  "thinking": {"type": "disabled"},
+  "reasoning": {"enabled": false, "effort": "none"},
+  "chat_template_kwargs": {"enable_thinking": false},
   "messages": [
     {"role": "system", "content": "<系统提示词>"},
     {"role": "user",   "content": "剧名：xxx\n以下是 50 条评论：\n1. ...\n2. ..."}
@@ -27,6 +31,34 @@ Content-Type: application/json
 
 任何兼容 OpenAI 协议的服务均可使用（DeepSeek、通义、Kimi、本地 Ollama+代理等），
 设置页中 `Base URL` 填到 `/v1` 为止，模块自动拼接 `/chat/completions`。
+
+## 关闭思考模式（AiClient.putDisableThinking）
+
+词条总结只需输出固定格式的 JSON，不需要模型深度推理，开启思考只会白白增加
+延迟与 token 消耗，故请求体强制关闭思考模式。
+
+OpenAI 兼容协议没有统一的"关闭思考"字段，各家实现不一致，请求体同时携带
+多个常见字段（兼容服务端对不认识的字段按忽略处理）：
+
+| 字段 | 适用服务端 |
+|---|---|
+| `enable_thinking: false` | 通义/DashScope、SiliconFlow、MiniMax 等 |
+| `thinking: {"type": "disabled"}` | **DeepSeek 官方**（[思考模式文档](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode)）、智谱 GLM 等 |
+| `reasoning: {"enabled": false, "effort": "none"}` | **DeepSeek 官方**（`effort: "none"` 即关闭思考）与 OpenRouter（`enabled: false`）两种形状并存 |
+| `chat_template_kwargs: {"enable_thinking": false}` | vLLM / SGLang 自部署 |
+
+DeepSeek 官方文档要点（2026-10 核对）：
+
+- OpenAI 格式关闭思考：`{"thinking": {"type": "disabled"}}`，或等价的
+  `{"reasoning": {"effort": "none"}}`；思考模式默认打开且 effort 默认 `high`；
+- 思考模式不支持 `temperature`（不报错但不生效）——本模块已关闭思考，
+  `temperature: 0.1` 可正常生效；
+- 思考输出的思维链在 `reasoning_content` 字段（与 `content` 同级）返回；
+  本模块请求不带 `tools`，无需回传；`parseTags` 只读 `content`，
+  天然不受思维链影响。
+
+Ollama 等本地服务忽略上述字段，由所加载模型自身决定是否输出思考内容
+（`extractJson` 的容错提取可兜底剥离夹杂在 content 里的思考文本）。
 
 ## 提示词设计（AiClient.buildSystemPrompt）
 
