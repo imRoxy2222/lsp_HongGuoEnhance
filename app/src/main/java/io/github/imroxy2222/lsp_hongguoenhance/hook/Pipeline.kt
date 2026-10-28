@@ -230,7 +230,7 @@ object Pipeline {
                 batchTexts.addAll(addDedup(page.comments.take(batchCap - batchCount)))
                 batchCount = batchTexts.size
                 accumulateRaw(cache, page)
-                LogStore.appendComments(seriesId, page.all, page.used, page.scores)
+                LogStore.appendComments(seriesId, page.all, page.used, page.scores, page.reasons)
                 cache.cursor = page.cursor
                 cache.hasMore = page.hasMore
                 // 过滤后不足一批时继续补一页（最多再补 2 次）
@@ -241,7 +241,7 @@ object Pipeline {
                     batchTexts.addAll(addDedup(toAdd))
                     batchCount = batchTexts.size
                     accumulateRaw(cache, page)
-                    LogStore.appendComments(seriesId, page.all, page.used, page.scores)
+                    LogStore.appendComments(seriesId, page.all, page.used, page.scores, page.reasons)
                     cache.cursor = page.cursor
                     cache.hasMore = page.hasMore
                     retry++
@@ -268,7 +268,7 @@ object Pipeline {
                 // 页内合格数可能超过剩余缺口（如 target=10、页 count=30），按缺口截取
                 cache.comments.addAll(page.comments.take(target))
                 accumulateRaw(cache, page)
-                LogStore.appendComments(seriesId, page.all, page.used, page.scores)
+                LogStore.appendComments(seriesId, page.all, page.used, page.scores, page.reasons)
                 cache.cursor = page.cursor
                 cache.hasMore = page.hasMore
                 var rounds = 0
@@ -279,7 +279,7 @@ object Pipeline {
                     val remaining = target - cache.comments.size
                     cache.comments.addAll(page.comments.take(remaining))
                     accumulateRaw(cache, page)
-                    LogStore.appendComments(seriesId, page.all, page.used, page.scores)
+                    LogStore.appendComments(seriesId, page.all, page.used, page.scores, page.reasons)
                     cache.cursor = page.cursor
                     cache.hasMore = page.hasMore
                     rounds++

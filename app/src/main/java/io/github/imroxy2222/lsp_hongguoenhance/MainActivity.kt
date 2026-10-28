@@ -7,50 +7,18 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,7 +28,6 @@ import io.github.imroxy2222.lsp_hongguoenhance.hook.AiClient
 import io.github.imroxy2222.lsp_hongguoenhance.hook.ModuleConfig
 import io.github.imroxy2222.lsp_hongguoenhance.ui.theme.HongGuoEnhanceTheme
 import io.github.libxposed.service.XposedService
-import io.github.libxposed.service.XposedServiceHelper
 
 /**
  * 模块设置页：配置 AI 接口信息（baseURL / API Key / 模型）与采集参数。
@@ -75,25 +42,25 @@ class MainActivity : ComponentActivity() {
     private val initialConfig = mutableStateOf<Map<String, Any>?>(null)
     private val launcherHidden = mutableStateOf(false)
 
+    /** 订阅进程级服务状态（XposedServiceHelper 只支持单一 listener，禁止页面各自注册）。 */
+    private val serviceListener = object : XposedServiceHolder.Listener {
+        override fun onServiceChanged(s: XposedService?) {
+            service = s
+            serviceReady.value = s != null
+            if (s != null) {
+                ensureLogToken(s)
+                initialConfig.value = loadPrefs(s)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         launcherHidden.value = LauncherVisibility.isHidden(this)
 
-        XposedServiceHelper.registerListener(object : XposedServiceHelper.OnServiceListener {
-            override fun onServiceBind(s: XposedService) {
-                service = s
-                serviceReady.value = true
-                ensureLogToken(s)
-                initialConfig.value = loadPrefs(s)
-            }
-
-            override fun onServiceDied(s: XposedService) {
-                service = null
-                serviceReady.value = false
-            }
-        })
+        XposedServiceHolder.addListener(serviceListener)
 
         setContent {
             HongGuoEnhanceTheme {
@@ -144,6 +111,9 @@ class MainActivity : ComponentActivity() {
                     onOpenLogs = {
                         startActivity(Intent(this, LogViewerActivity::class.java))
                     },
+                    onOpenFilterRules = {
+                        startActivity(Intent(this, FilterRulesActivity::class.java))
+                    },
                     onHideIconChange = { hide ->
                         LauncherVisibility.setHidden(this, hide)
                         launcherHidden.value = LauncherVisibility.isHidden(this)
@@ -151,6 +121,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onDestroy() {
+        XposedServiceHolder.removeListener(serviceListener)
+        super.onDestroy()
     }
 
     /** 生成日志服务访问令牌（仅首次；宿主进程读取同一配置校验请求）。 */
@@ -233,6 +208,7 @@ fun SettingsScreen(
     onScopeRequest: () -> Unit,
     onSave: (String, String, String, Int, Int, String, Int, Int, Boolean, Boolean, Set<String>) -> Unit,
     onOpenLogs: () -> Unit,
+    onOpenFilterRules: () -> Unit,
     onHideIconChange: (Boolean) -> Unit,
 ) {
     fun str(key: String, fallback: String): String {
@@ -385,12 +361,12 @@ fun SettingsScreen(
                     HelpBadge(
                         title = "取消思考",
                         help = "点击右侧箭头展开，按你使用的 AI 服务勾选要携带的\"关闭思考\"字段；" +
-                            "收起后已勾选的项仍会在请求时携带，全部不勾选即完全关闭。\n\n" +
-                            "注意：部分服务端（如 Groq、OpenAI 官方）遇到不认识的参数会直接报错" +
-                            "（invalid_request_error），只勾选你的平台即可；\n" +
-                            "· Groq 无对应字段，全部不勾选；\n" +
-                            "· OpenAI 官方只勾\"OpenAI 官方\"一项（o 系列只能调低思考，" +
-                            "GPT-5 支持更低；gpt-4o 等非推理模型无需勾选任何项）。"
+                                "收起后已勾选的项仍会在请求时携带，全部不勾选即完全关闭。\n\n" +
+                                "注意：部分服务端（如 Groq、OpenAI 官方）遇到不认识的参数会直接报错" +
+                                "（invalid_request_error），只勾选你的平台即可；\n" +
+                                "· Groq 无对应字段，全部不勾选；\n" +
+                                "· OpenAI 官方只勾\"OpenAI 官方\"一项（o 系列只能调低思考，" +
+                                "GPT-5 支持更低；gpt-4o 等非推理模型无需勾选任何项）。"
                     )
                     Spacer(Modifier.weight(1f))
                     Text(
@@ -451,11 +427,11 @@ fun SettingsScreen(
                     HelpBadge(
                         title = "AI 走模块进程",
                         help = "开启后 AI 请求由本模块自身的进程发出，而不是红果短剧进程。\n\n" +
-                            "用途：使用国外大模型时，代理/VPN 白名单只需放行本模块应用，" +
-                            "红果（视频流量大）无需走代理，节省流量。\n\n" +
-                            "注意：若本模块被系统强停（设置里\"强行停止\"或部分省电策略杀后台），" +
-                            "AI 总结会报\"进程桥不可用\"——打开一次模块设置页即可恢复；" +
-                            "关闭本开关则回到旧的宿主进程直连方式。"
+                                "用途：使用国外大模型时，代理/VPN 白名单只需放行本模块应用，" +
+                                "红果（视频流量大）无需走代理，节省流量。\n\n" +
+                                "注意：若本模块被系统强停（设置里\"强行停止\"或部分省电策略杀后台），" +
+                                "AI 总结会报\"进程桥不可用\"——打开一次模块设置页即可恢复；" +
+                                "关闭本开关则回到旧的宿主进程直连方式。"
                     )
                     Spacer(Modifier.weight(1f))
                     Switch(
@@ -490,10 +466,38 @@ fun SettingsScreen(
                     help = "可选。追加到系统提示词末尾的额外要求，用于自定义 AI 总结的风格与侧重点。",
                     value = extraPrompt,
                     onValueChange = { extraPrompt = it },
-                        placeholder = "可选，追加到系统提示词末尾",
-                        singleLine = false,
-                        minLines = 5
+                    placeholder = "可选，追加到系统提示词末尾",
+                    singleLine = false,
+                    minLines = 5
                 )
+                // 过滤规则入口：跳转二级页面管理排除型正则（独立保存，不走主页保存按钮）
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenFilterRules),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("过滤规则", style = MaterialTheme.typography.titleSmall)
+                            Spacer(Modifier.width(6.dp))
+                            HelpBadge(
+                                title = "过滤规则",
+                                help = "采用子串包含模式,命中任一规则,评论将被丢弃,不会交给AI处理"
+                            )
+                        }
+                        Text(
+                            "排除型正则，命中即不交给 AI · 点击管理",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        "›",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             // ── 评论词条日志 ───────────────────────────────────────────

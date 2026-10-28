@@ -14,7 +14,8 @@ import org.json.JSONObject
  * 数据库位于宿主私有目录 filesDir/databases/hge_logs.db，四张表：
  *
  *   series    —— 剧索引：seriesId、剧名（可为 null）、created、last_update
- *   comment   —— 抓取到的**全部**评论（used=1 交给 AI 提取词条，used=0 被过滤丢弃）
+ *   comment   —— 抓取到的**全部**评论（used=1 交给 AI 提取词条，used=0 被过滤丢弃，
+ *                drop_reason 记录丢弃原因：如"命中过滤器2,规则更新"）
  *   ai_log    —— 每次 AI 调用：发送给 AI 的完整请求体、AI 返回的原始响应
  *   error_log —— 流程异常
  *
@@ -29,7 +30,7 @@ import org.json.JSONObject
 object LogStore {
     private const val TAG = HookEntry.TAG
     private const val DB_NAME = "hge_logs.db"
-    private const val DB_VERSION = 3
+    private const val DB_VERSION = 4
 
     /** 清理检查最小间隔：避免每次追加都全表扫描。 */
     private const val RETENTION_CHECK_INTERVAL_MS = 60 * 60 * 1000L
@@ -57,7 +58,8 @@ object LogStore {
                     "time INTEGER NOT NULL," +
                     "text TEXT NOT NULL," +
                     "used INTEGER NOT NULL DEFAULT 0," +
-                    "score REAL)"
+                    "score REAL," +
+                    "drop_reason TEXT)"
             )
             db.execSQL("CREATE INDEX idx_comment_series ON comment(series_id, _id)")
             db.execSQL(
@@ -89,6 +91,10 @@ object LogStore {
             if (oldVersion < 3) {
                 db.execSQL("ALTER TABLE comment ADD COLUMN score REAL")
                 db.execSQL("ALTER TABLE series ADD COLUMN cursor TEXT")
+            }
+            // v4：comment 增加丢弃原因列（如"命中过滤器2,规则更新"，日志页展示用）
+            if (oldVersion < 4) {
+                db.execSQL("ALTER TABLE comment ADD COLUMN drop_reason TEXT")
             }
         }
     }
@@ -147,14 +153,16 @@ object LogStore {
     /**
      * 写入一批抓取到的评论（全部，含被过滤丢弃的）。
      * @param texts 评论文本列表
-     * @param used  与 texts 一一对应：true = 通过长度过滤、已进入 AI 输入
+     * @param used  与 texts 一一对应：true = 通过过滤、已进入 AI 输入
      * @param scores 与 texts 一一对应：评分（reply.expand.score），未评分为 null
+     * @param reasons 与 texts 一一对应：丢弃原因（null = 未丢弃；如"命中过滤器2,规则更新"）
      */
     fun appendComments(
         seriesId: String,
         texts: List<String>,
         used: List<Boolean>,
         scores: List<Float?> = emptyList(),
+        reasons: List<String?> = emptyList(),
     ) {
         if (texts.isEmpty()) return
         val d = db() ?: return
@@ -165,7 +173,7 @@ object LogStore {
             try {
                 touchSeries(w, seriesId, null, now)
                 val stmt = w.compileStatement(
-                    "INSERT INTO comment(series_id, time, text, used, score) VALUES(?,?,?,?,?)"
+                    "INSERT INTO comment(series_id, time, text, used, score, drop_reason) VALUES(?,?,?,?,?,?)"
                 )
                 for (i in texts.indices) {
                     stmt.clearBindings()
@@ -175,6 +183,8 @@ object LogStore {
                     stmt.bindLong(4, if (i < used.size && used[i]) 1L else 0L)
                     val s = if (i < scores.size) scores[i] else null
                     if (s != null) stmt.bindDouble(5, s.toDouble()) else stmt.bindNull(5)
+                    val r = if (i < reasons.size) reasons[i] else null
+                    if (r != null) stmt.bindString(6, r) else stmt.bindNull(6)
                     stmt.executeInsert()
                 }
                 w.setTransactionSuccessful()
@@ -480,16 +490,16 @@ object LogStore {
             val out = JSONObject()
             val comments = JSONArray()
             w.rawQuery(
-                "SELECT time, text, used FROM comment WHERE series_id=? ORDER BY _id ASC",
+                "SELECT time, text, used, drop_reason FROM comment WHERE series_id=? ORDER BY _id ASC",
                 arrayOf(seriesId)
             ).use { c ->
                 while (c.moveToNext()) {
-                    comments.put(
-                        JSONObject()
-                            .put("t", c.getLong(0))
-                            .put("text", c.getString(1))
-                            .put("used", c.getLong(2) != 0L)
-                    )
+                    val o = JSONObject()
+                        .put("t", c.getLong(0))
+                        .put("text", c.getString(1))
+                        .put("used", c.getLong(2) != 0L)
+                    if (!c.isNull(3)) o.put("reason", c.getString(3))
+                    comments.put(o)
                 }
             }
             val ai = JSONArray()

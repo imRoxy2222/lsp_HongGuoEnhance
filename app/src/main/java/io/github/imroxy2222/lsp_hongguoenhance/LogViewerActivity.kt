@@ -32,7 +32,6 @@ import io.github.imroxy2222.lsp_hongguoenhance.hook.LogServer
 import io.github.imroxy2222.lsp_hongguoenhance.hook.ModuleConfig
 import io.github.imroxy2222.lsp_hongguoenhance.ui.theme.HongGuoEnhanceTheme
 import io.github.libxposed.service.XposedService
-import io.github.libxposed.service.XposedServiceHelper
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.*
@@ -70,7 +69,13 @@ private class SeriesEntry(
     val aiCount: Int,
 )
 
-private data class CommentRec(val time: Long, val text: String, val used: Boolean)
+/**
+ * 单条评论记录。
+ * @param reason 丢弃原因（used=false 时有效）：如"命中过滤器2,规则更新"、
+ *                "命中过滤器1,规则[\s\S]{15,}"（字数下限也是一条规则）；
+ *                旧版本记录无此字段为 null，展示时回退为通用文案。
+ */
+private data class CommentRec(val time: Long, val text: String, val used: Boolean, val reason: String? = null)
 private data class AiRec(val time: Long, val baseCount: Int, val request: String?, val response: String?)
 private data class ErrorRec(val time: Long, val msg: String)
 private data class SeriesLog(
@@ -245,12 +250,22 @@ private object RootLogReader {
     fun readLog(context: Context, seriesId: String): SeriesLog =
         openDb(context).use { d ->
             val comments = ArrayList<CommentRec>()
-            d.rawQuery(
-                "SELECT time, text, used FROM comment WHERE series_id=? ORDER BY _id ASC",
-                arrayOf(seriesId)
-            ).use { c ->
+            // drop_reason 为 v4 新增列：宿主库若尚未升级（旧版本进程），回退旧查询
+            val hasReason = runCatching {
+                d.rawQuery("SELECT drop_reason FROM comment LIMIT 1", null).use { it.columnCount > 0 }
+            }.getOrDefault(false)
+            val sql = if (hasReason)
+                "SELECT time, text, used, drop_reason FROM comment WHERE series_id=? ORDER BY _id ASC"
+            else
+                "SELECT time, text, used FROM comment WHERE series_id=? ORDER BY _id ASC"
+            d.rawQuery(sql, arrayOf(seriesId)).use { c ->
                 while (c.moveToNext()) {
-                    comments.add(CommentRec(c.getLong(0), c.getString(1), c.getLong(2) != 0L))
+                    comments.add(
+                        CommentRec(
+                            c.getLong(0), c.getString(1), c.getLong(2) != 0L,
+                            if (hasReason && !c.isNull(3)) c.getString(3) else null
+                        )
+                    )
                 }
             }
             val ai = ArrayList<AiRec>()
@@ -366,7 +381,12 @@ private object LogApiClient {
         data.optJSONArray("comments")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
-                comments.add(CommentRec(o.optLong("t"), o.optString("text"), o.optBoolean("used")))
+                comments.add(
+                    CommentRec(
+                        o.optLong("t"), o.optString("text"), o.optBoolean("used"),
+                        o.optString("reason").takeIf { it.isNotEmpty() }
+                    )
+                )
             }
         }
         val ai = ArrayList<AiRec>()
@@ -424,24 +444,22 @@ class LogViewerActivity : ComponentActivity() {
     private val entries = mutableStateOf<List<SeriesEntry>>(emptyList())
     private val detail = mutableStateOf<Pair<SeriesEntry, SeriesLog>?>(null)
 
+    /** 订阅进程级服务状态（XposedServiceHelper 只支持单一 listener，禁止页面各自注册）。 */
+    private val serviceListener = object : XposedServiceHolder.Listener {
+        override fun onServiceChanged(s: XposedService?) {
+            service = s
+            val p = s?.getRemotePreferences(ModuleConfig.PREFS_NAME) ?: return
+            token.value = p.getString(ModuleConfig.KEY_LOG_TOKEN, "") ?: ""
+            hostStatus.value = p.getString(ModuleConfig.KEY_LOG_SERVER_STATUS, "") ?: ""
+            RootLogReader.hostDbPath = p.getString(ModuleConfig.KEY_LOG_DB_PATH, "") ?: ""
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        XposedServiceHelper.registerListener(object : XposedServiceHelper.OnServiceListener {
-            override fun onServiceBind(s: XposedService) {
-                service = s
-                val p = s.getRemotePreferences(ModuleConfig.PREFS_NAME)
-                token.value = p.getString(ModuleConfig.KEY_LOG_TOKEN, "") ?: ""
-                hostStatus.value = p.getString(ModuleConfig.KEY_LOG_SERVER_STATUS, "") ?: ""
-                RootLogReader.hostDbPath =
-                    p.getString(ModuleConfig.KEY_LOG_DB_PATH, "") ?: ""
-            }
-
-            override fun onServiceDied(s: XposedService) {
-                service = null
-            }
-        })
+        XposedServiceHolder.addListener(serviceListener)
 
         setContent {
             HongGuoEnhanceTheme {
@@ -454,6 +472,11 @@ class LogViewerActivity : ComponentActivity() {
         }
 
         loadList()
+    }
+
+    override fun onDestroy() {
+        XposedServiceHolder.removeListener(serviceListener)
+        super.onDestroy()
     }
 
     /** root 直读（优先）→ TCP 回退。 */
@@ -774,7 +797,8 @@ class LogViewerActivity : ComponentActivity() {
                 if (expanded) {
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        if (rec.used) "已交给 AI 提取词条" else "未交给 AI（被过滤丢弃）",
+                        if (rec.used) "已交给 AI 提取词条"
+                        else "未交给AI, ${rec.reason ?: "被过滤丢弃"}",
                         style = MaterialTheme.typography.labelSmall,
                         color = barColor
                     )

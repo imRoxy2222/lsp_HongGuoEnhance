@@ -36,19 +36,24 @@ object CommentFetcher {
     /** 单次请求超时（毫秒）：超时后进入 fallback 路径或报错。 */
     private const val REQUEST_TIMEOUT_MS = 15_000L
 
-    /** 评论文本最小长度（字数），达到即通过（>=）。 */
-    private const val MIN_TEXT_LENGTH = 15
-
-    /** 排除型过滤：含"第X季"（多为剧名/续季宣传语）或"更新"（多为催更/版本讨论）的评论，对剧情判断无价值。 */
-    private val EXCLUDE_PATTERNS = listOf(
-        Regex("第.+季"),
-        Regex("更新"),
-    )
+    /**
+     * 排除型过滤规则：用户在设置页"过滤规则"中配置的正则（按顺序编号 1,2,3...），
+     * 命中任一即丢弃。每页解析时实时读取配置——设置页保存后无需重启宿主。
+     * 无效正则跳过（不因坏规则中断采集）。
+     *
+     * 字数下限过滤同样由规则实现（默认规则 1 = [\s\S]{15,}，即少于 15 字丢弃），
+     * 不再硬编码；用户清空全部规则 = 不做任何过滤。
+     */
+    private fun excludePatterns(): List<Pair<Int, Regex>> =
+        ModuleConfig.excludeRules().mapIndexedNotNull { i, src ->
+            runCatching { (i + 1) to Regex(src) }.getOrNull()
+        }
 
     data class Page(
-        val comments: List<String>,   // 本页合格（长度过滤后）评论文本，即交给 AI 的部分
+        val comments: List<String>,   // 本页合格（过滤后）评论文本，即交给 AI 的部分
         val all: List<String>,        // 本页抓到的全部评论文本（含被过滤丢弃的）
         val used: List<Boolean>,      // 与 all 一一对应：true = 通过过滤、进入 AI 输入
+        val reasons: List<String?>,   // 与 all 一一对应：丢弃原因（null = 未丢弃）；如"命中过滤器2,规则更新"
         val scores: List<Float?>,     // 与 all 一一对应：评论评分（reply.expand.score，未评分为 null）
         val totalFetched: Int,        // 本页原始条数
         val cursor: String?,          // 下一页游标
@@ -250,7 +255,7 @@ object CommentFetcher {
     // 响应解析与诊断
     // ------------------------------------------------------------------
 
-    /** 解析响应：过滤长度<15、或含"第X季"/"更新"的评论。 */
+    /** 解析响应：命中用户配置过滤规则（默认含字数下限"第X季"/"更新"等）的评论被丢弃。 */
     private fun parsePage(response: Any): Page {
         // 两条路径的返回类型不同：
         //   wrapper 路径 h.e(...)            -> Single<CommentListData>（已 map 解包）
@@ -273,6 +278,7 @@ object CommentFetcher {
 
         val all = ArrayList<String>(dataList.size)
         val usedFlags = ArrayList<Boolean>(dataList.size)
+        val dropReasons = ArrayList<String?>(dataList.size)
         val scores = ArrayList<Float?>(dataList.size)
         for (item in dataList) {
             if (item == null) continue
@@ -290,18 +296,27 @@ object CommentFetcher {
             val score = (getField(reply, "expand")?.let { getField(it, "score") } as? String)
                 ?.toFloatOrNull()
             all.add(t)
-            usedFlags.add(shouldKeep(t))
+            val reason = dropReason(t)
+            usedFlags.add(reason == null)
+            dropReasons.add(reason)
             scores.add(score)
         }
         val texts = all.filterIndexed { i, _ -> usedFlags[i] }
         Logger.i("page fetched: raw=${dataList.size}, got=${all.size}, filtered=${texts.size}, hasMore=$hasMore")
-        return Page(texts, all, usedFlags, scores, dataList.size, cursor, hasMore)
+        return Page(texts, all, usedFlags, dropReasons, scores, dataList.size, cursor, hasMore)
     }
 
-    /** 过滤判定：字数 >= [MIN_TEXT_LENGTH]，且不命中 [EXCLUDE_PATTERNS] 任一排除规则。 */
-    private fun shouldKeep(t: String): Boolean {
-        if (t.length < MIN_TEXT_LENGTH) return false
-        return EXCLUDE_PATTERNS.none { it.containsMatchIn(t) }
+    /**
+     * 过滤判定：返回 null = 保留（未命中任何排除规则）；
+     * 非 null = 丢弃原因，格式"命中过滤器Z,规则XXXX"
+     * （Z 为用户规则的顺序编号 1,2,3...，XXXX 为命中时的正则原文，
+     * 如"命中过滤器1,规则[\s\S]{15,}"）。
+     */
+    private fun dropReason(t: String): String? {
+        excludePatterns().forEach { (index, regex) ->
+            if (regex.containsMatchIn(t)) return "命中过滤器$index,规则${regex.pattern}"
+        }
+        return null
     }
 
     /** dump 响应中的 code / message / debug_info / log_id / Header。 */

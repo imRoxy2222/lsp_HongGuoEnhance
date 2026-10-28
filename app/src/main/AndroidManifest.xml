@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
+        android:name=".App"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:description="@string/module_description"
@@ -44,6 +45,14 @@
             android:exported="false"
             android:label="评论词条日志"
             android:theme="@style/Theme.HongGuoEnhance" />
+
+        <!-- 过滤规则二级设置页：管理评论采集的排除型正则（独立保存） -->
+        <activity
+            android:name=".FilterRulesActivity"
+            android:exported="false"
+            android:label="过滤规则"
+            android:theme="@style/Theme.HongGuoEnhance"
+            android:windowSoftInputMode="adjustResize" />
 
         <!-- AI 进程桥：宿主(红果)进程经 ContentResolver.call 把 AI 请求交给
              模块进程执行，代理白名单只需放行模块应用。exported 但 Provider
