@@ -4,6 +4,10 @@ import android.app.Activity
 import android.app.Dialog
 import android.graphics.*
 import android.graphics.drawable.GradientDrawable
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -140,24 +144,27 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
             tagContainer.removeAllViews()
             val shown = tags.take(MAX_SHOWN_TAGS)
             val maxCount = shown.maxOfOrNull { it.count }?.coerceAtLeast(1) ?: 1
-            for (t in shown) {
-                tagContainer.addView(makeTagRow(t.text, t.count, t.count.toFloat() / maxCount))
+            for ((text, count, negative) in shown) {
+                tagContainer.addView(
+                    makeTagRow(text, count, count.toFloat() / maxCount, negative)
+                )
             }
             val totalInfo =
                 if (tags.size > shown.size) "（共 ${tags.size} 个，显示前 ${shown.size}）" else " · 共 ${tags.size} 个词条"
-            stateView.text = "${Pipeline.statsLine(seriesId)}$totalInfo"
+            stateView.text = styledStats("${Pipeline.statsLine(seriesId)}$totalInfo")
         }
     }
 
     fun onState(state: Pipeline.State, info: String, commentsCount: Int, hasMore: Boolean) {
         activity.runOnUiThread {
-            stateView.text = when (state) {
-                Pipeline.State.IDLE -> info.ifEmpty { "就绪" }
-                Pipeline.State.COLLECTING -> "$info（已采集 $commentsCount 条）"
-                Pipeline.State.AI_PENDING -> info
-                Pipeline.State.DONE -> info.ifEmpty { "${Pipeline.statsLine(seriesId)} · 完成" }
-                Pipeline.State.ERROR -> info
-            }
+            stateView.text = styledStats(
+                when (state) {
+                    Pipeline.State.IDLE -> info.ifEmpty { "就绪" }
+                    Pipeline.State.COLLECTING -> "$info（已采集 $commentsCount 条）"
+                    Pipeline.State.AI_PENDING -> info
+                    Pipeline.State.DONE -> info.ifEmpty { "${Pipeline.statsLine(seriesId)} · 完成" }
+                    Pipeline.State.ERROR -> info
+                })
             loadMoreBtn.visibility =
                 if (state == Pipeline.State.DONE && (hasMore || commentsCount > 0)) View.VISIBLE
                 else View.GONE
@@ -168,8 +175,9 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
     /**
      * 构建一行词条：
      * [词条名 固定宽96dp，超长跑马灯滚动] [条形 weight=1，长度∝fraction] [×N]
+     * negative 词条条形使用"灰黑 → 暗红"渐变，普通词条为"灰黑 → 萤绿"。
      */
-    private fun makeTagRow(text: String, count: Int, fraction: Float): View {
+    private fun makeTagRow(text: String, count: Int, fraction: Float, negative: Boolean): View {
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -180,7 +188,7 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
             this.text = text
             textSize = 14f
             setTextColor(Color.WHITE)
-            setSingleLine(true)
+            isSingleLine = true
             ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
             marqueeRepeatLimit = -1 // 无限滚动
             isSelected = true       // 触发跑马灯（短文本不会滚动，只有超长才滚）
@@ -191,7 +199,7 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
         )
 
         // 条形：自绘，填充宽度由 fraction 决定，无布局时机问题
-        val bar = BarView(context, fraction.coerceIn(0f, 1f))
+        val bar = BarView(context, fraction.coerceIn(0f, 1f), negative)
         row.addView(
             bar,
             LinearLayout.LayoutParams(0, dp(18f), 1f).apply { marginStart = dp(8f) }
@@ -220,20 +228,78 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
     }
 
     private fun dp(v: Float): Int = (v * context.resources.displayMetrics.density + 0.5f).toInt()
+
+    /** "平均得分X.X" 中的得分数字着色 + 缩放：≥8 保持原灰色原字号；<8 分越低红越鲜艳，且每降 2 分字号增大一号。 */
+    private fun styledStats(text: String): CharSequence {
+        val m = SCORE_PATTERN.find(text) ?: return text
+        val score = m.groupValues[1].toFloatOrNull() ?: return text
+        val range = m.groups[1]!!.range
+        return SpannableStringBuilder(text).apply {
+            setSpan(
+                ForegroundColorSpan(scoreColor(score)),
+                range.first, range.last + 1,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+            setSpan(
+                RelativeSizeSpan(scoreSizeFactor(score)),
+                range.first, range.last + 1,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+        }
+    }
+
+    /** 得分 → 颜色：≥8 原灰色；8 以下在浅红 → 鲜艳红之间线性插值（分越低越鲜艳）。 */
+    private fun scoreColor(score: Float): Int {
+        if (score >= 8f) return STATE_TEXT_COLOR
+        val f = ((8f - score) / 8f).coerceIn(0f, 1f)
+        val sr = Color.red(COLOR_RED_SOFT)
+        val sg = Color.green(COLOR_RED_SOFT)
+        val sb = Color.blue(COLOR_RED_SOFT)
+        val er = Color.red(COLOR_RED_VIVID)
+        val eg = Color.green(COLOR_RED_VIVID)
+        val eb = Color.blue(COLOR_RED_VIVID)
+        return Color.rgb(
+            (sr + (er - sr) * f).toInt(),
+            (sg + (eg - sg) * f).toInt(),
+            (sb + (eb - sb) * f).toInt()
+        )
+    }
+
+    /** 得分 → 字号因子：≥8 原字号；<8 每降 2 分增大一号（+0.15 倍），封顶 1.75 倍防止撑破状态栏。 */
+    private fun scoreSizeFactor(score: Float): Float {
+        if (score >= 8f) return 1f
+        val steps = ((8f - score) / 2f).toInt()  // 6~8 分 0 级、4~6 分 1 级、2~4 分 2 级、0~2 分 3 级
+        return (1f + steps * SCORE_SIZE_STEP).coerceAtMost(SCORE_SIZE_MAX)
+    }
+
+    private val SCORE_PATTERN = Regex("平均分(\\d+(?:\\.\\d+)?)")  // 兼容"平均得分X.X"与"总评论平均分X.X"
+    private val STATE_TEXT_COLOR = Color.parseColor("#9AA0A6")
+    private val SCORE_SIZE_STEP = 0.25f  // 每档字号增量（相对原字号倍数）
+    private val SCORE_SIZE_MAX = 1.75f   // 字号封顶倍数
+    private val COLOR_RED_SOFT = Color.parseColor("#E57373")   // 刚跌破 8 分：浅红
+    private val COLOR_RED_VIVID = Color.parseColor("#FF1744")  // 趋近 0 分：鲜艳红
 }
 
 /**
- * 横向条形（方案A）：深灰圆角轨道 + 按占比填充的青色圆角条。
+ * 横向条形（方案A）：深灰圆角轨道 + 按占比填充的渐变圆角条。
+ * 普通词条：灰黑 → 萤绿；负面词条（negative=true）：灰黑 → 暗红。
  * 自绘 View，无布局时机问题。
  */
-private class BarView(context: android.content.Context, private val fraction: Float) :
-    View(context) {
+private class BarView(
+    context: android.content.Context,
+    private val fraction: Float,
+    private val negative: Boolean,
+) : View(context) {
 
     private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#2E2E34")
     }
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val radius: Float = dp(9f).toFloat()
+
+    /** 渐变终点色：普通 = 萤绿，负面 = 暗红（起点均为灰黑 #242323）。 */
+    private val endColor: Int =
+        if (negative) Color.parseColor("#B22222") else Color.parseColor("#B9FF66")
 
     private fun dp(v: Float): Int =
         (v * context.resources.displayMetrics.density + 0.5f).toInt()
@@ -248,7 +314,7 @@ private class BarView(context: android.content.Context, private val fraction: Fl
             val fillW = (w * fraction).coerceAtLeast(h)
             fillPaint.shader = LinearGradient(
                 0f, 0f, fillW, 0f,
-                Color.parseColor("#242323"), Color.parseColor("#B9FF66"),
+                Color.parseColor("#242323"), endColor,
                 Shader.TileMode.CLAMP
             )
             canvas.drawRoundRect(0f, 0f, fillW, h, radius, radius, fillPaint)

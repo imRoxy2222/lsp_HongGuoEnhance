@@ -21,19 +21,26 @@ object AiClient {
     private const val CONNECT_TIMEOUT = 15_000
     private const val READ_TIMEOUT = 120_000
 
-    data class Tag(val text: String, val count: Int)
+    /**
+     * 词条：negative=true 表示负面评价词条（AI 未标注时为 false）。
+     */
+    data class Tag(val text: String, val count: Int, val negative: Boolean = false)
 
     /** 一次 AI 调用的完整结果：词条 + 发送的请求体 + 原始响应（日志用）。 */
     data class AiResult(val tags: List<Tag>, val request: String, val response: String)
 
     class AiException(message: String) : Exception(message)
 
-    fun summarize(comments: List<String>, seriesName: String?): AiResult {
+    fun summarize(
+        comments: List<String>,
+        seriesName: String?,
+        previousTags: List<String> = emptyList(),
+    ): AiResult {
         val baseUrl = ModuleConfig.baseUrl().trimEnd('/')
         val apiKey = ModuleConfig.apiKey()
         if (apiKey.isEmpty()) throw AiException("尚未配置 API Key，请打开模块设置页配置")
 
-        val systemPrompt = buildSystemPrompt()
+        val systemPrompt = buildSystemPrompt(previousTags)
         val userPrompt = buildUserPrompt(comments, seriesName)
 
         val body = JSONObject().apply {
@@ -109,16 +116,28 @@ object AiClient {
         put("chat_template_kwargs", JSONObject().put("enable_thinking", false))
     }
 
-    private fun buildSystemPrompt(): String {
+    private fun buildSystemPrompt(previousTags: List<String>): String {
         val extra = ModuleConfig.extraPrompt()
+        // "继续加载"增量模式下带上已有词条：优先沿用同名词条，方便累计合并；
+        // 仅是优先而非强制，避免新特点被旧词条集合限死
+        val prefer = if (previousTags.isEmpty()) "" else
+            "此前已总结出以下词条：${previousTags.joinToString("、")}。\n" +
+            "本次总结请优先沿用上述词条：若新评论体现的特点与已有词条相同，" +
+            "必须使用完全相同的词条名，以便累计合并计数；" +
+            "但这只是优先而非强制——若新评论体现了已有词条未覆盖的新特点，" +
+            "可以总结新词条。\n"
         return "你是一名短剧评论分析助手。用户会给你一批某部短剧的观众评论，" +
                 "请你从中提炼出描述剧情与人设特点的评价词条，" +
                 "例如：杀伐果断、圣母、无脑爽文、逻辑漏洞、演技在线、节奏拖沓 等。" +
                 "不需要每条评论都提取词条,提取词条为单个词语,不要出现用斜杠分割的多个词语,如\"家人善良/非白眼狼\",同类词语互相合并" +
                 "并统计每个词条被评论提及或体现的次数（count）。" +
+                "每个词条用对象表示，除 tag 与 count 外，" +
+                "若该词条属于负面评价（差评、缺点、槽点类），额外加 negative 字段且值为 true；" +
+                "正面或中性词条可省略 negative 字段，或填 false。" +
                 "只输出 JSON，不要任何解释、不要 markdown 代码块，格式：" +
-                "{\"tags\":[{\"tag\":\"词条\",\"count\":10}]}，按 count 从高到低排列，" +
+                "{\"tags\":[{\"tag\":\"词条\",\"count\":10,\"negative\":false}]}，按 count 从高到低排列，" +
                 "最多输出 10 个词条。" +
+                (if (prefer.isNotEmpty()) "\n$prefer" else "") +
                 (if (extra.isNotEmpty()) "\n用户补充要求：$extra" else "")
     }
 
@@ -146,7 +165,7 @@ object AiClient {
             val o = arr.getJSONObject(i)
             val t = o.optString("tag").trim()
             if (t.isEmpty()) continue
-            tags.add(Tag(t, o.optInt("count", 0)))
+            tags.add(Tag(t, o.optInt("count", 0), o.optBoolean("negative", false)))
         }
         if (tags.isEmpty()) throw AiException("AI 未返回有效词条: ${content.take(200)}")
         Log.i(TAG, "AI tags: ${tags.size}")

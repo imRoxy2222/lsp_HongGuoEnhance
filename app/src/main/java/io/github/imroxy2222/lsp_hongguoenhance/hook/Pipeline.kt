@@ -25,10 +25,13 @@ object Pipeline {
         var seriesName: String? = null,
     ) {
         val comments = Collections.synchronizedList(ArrayList<String>())
+
         /** 全部采集过的评论文本（含被过滤丢弃的），用于运行期去重。 */
         val rawSeen = HashSet<String>()
+
         /** 总采集条数（含被过滤丢弃的，去重后）——状态栏的 x。 */
         var rawCount: Int = 0
+
         /** 已采集评论的评分总和（未评分计 0）——平均得分 z = scoreSum / rawCount。 */
         var scoreSum: Double = 0.0
         var cursor: String? = null
@@ -36,16 +39,17 @@ object Pipeline {
         var state: State = State.IDLE
         var stateInfo: String = ""
         var tags: List<AiClient.Tag>? = null
+
         /** 生成当前词条时使用的评论数（用于"继续加载"后判断是否需要重新总结） */
         var tagsFromCount: Int = -1
     }
 
-    /** 状态栏统计行：总x条评论,参考y条,平均得分z。 */
+    /** 状态栏统计行：总x条评论,AI参考y条,总评论平均分z。 */
     fun statsLine(seriesId: String): String {
         val cache = caches[seriesId] ?: return "暂无数据"
         val avg = if (cache.rawCount > 0) cache.scoreSum / cache.rawCount else 0.0
-        return "总${cache.rawCount}条评论,参考${cache.comments.size}条," +
-                "平均得分${String.format(java.util.Locale.US, "%.1f", avg)}"
+        return "总${cache.rawCount}条评论,AI参考${cache.comments.size}条," +
+                "总评论平均分${String.format(java.util.Locale.US, "%.1f", avg)}"
     }
 
     /** 累计一页的采集统计（按文本去重；重复评论不计条数、不计分）。 */
@@ -301,7 +305,7 @@ object Pipeline {
         val cache = caches[seriesId] ?: return
         val oldTags = cache.tags
         val incremental = newBatch != null && !oldTags.isNullOrEmpty() && newBatch.isNotEmpty()
-        val toSummarize = if (incremental) newBatch!! else cache.comments.toList()
+        val toSummarize = if (incremental) newBatch else cache.comments.toList()
         if (toSummarize.isEmpty()) {
             if (incremental) {
                 // 无新增（如全部与历史重复）：保留旧词条直接结束
@@ -317,21 +321,29 @@ object Pipeline {
             else "正在调用 AI 分析 ${toSummarize.size} 条剧评..."
         )
         val result = try {
-            AiClient.summarize(toSummarize, cache.seriesName)
+            AiClient.summarize(
+                toSummarize, cache.seriesName,
+                // 增量模式：把已有词条发给 AI，让其优先沿用同名词条（便于合并）
+                if (incremental) oldTags.map { it.text } else emptyList()
+            )
         } catch (t: Throwable) {
             Logger.e("ai summarize failed", t)
             LogStore.appendError(seriesId, "AI 总结失败：${t.message ?: t.javaClass.simpleName}")
             updateState(seriesId, State.ERROR, "AI 总结失败：${t.message ?: t.javaClass.simpleName}")
             return
         }
-        // 增量模式：与旧词条合并计数（同名词条 count 相加），再按数量降序
+        // 增量模式：与旧词条合并计数（同名词条 count 相加），再按数量降序；
+        // negative 按或合并——同一词条任意一次被标注为负面即视为负面
         val mergedTags: List<AiClient.Tag> = if (incremental) {
-            val merged = LinkedHashMap<String, Int>()
-            for (t in oldTags!!) merged[t.text] = (merged[t.text] ?: 0) + t.count
-            for (t in result.tags) merged[t.text] = (merged[t.text] ?: 0) + t.count
-            merged.entries
-                .map { AiClient.Tag(it.key, it.value) }
-                .sortedByDescending { it.count }
+            val merged = LinkedHashMap<String, AiClient.Tag>()
+            fun add(t: AiClient.Tag) {
+                val e = merged[t.text]
+                merged[t.text] = if (e == null) t
+                else AiClient.Tag(t.text, e.count + t.count, e.negative || t.negative)
+            }
+            for (t in oldTags) add(t)
+            for (t in result.tags) add(t)
+            merged.values.sortedByDescending { it.count }
         } else {
             result.tags
         }
@@ -343,9 +355,7 @@ object Pipeline {
         val tags = mergedTags
         main.post {
             updateState(seriesId, State.DONE, statsLine(seriesId))
-            activeDialog?.get()?.takeIf { it.seriesId == seriesId }?.let { d ->
-                d.onTags(tags)
-            }
+            activeDialog?.get()?.takeIf { it.seriesId == seriesId }?.onTags(tags)
         }
     }
 
@@ -354,17 +364,15 @@ object Pipeline {
         cache.state = state
         cache.stateInfo = info
         main.post {
-            activeDialog?.get()?.takeIf { it.seriesId == seriesId }?.let { d ->
-                d.onState(state, info, cache.comments.size, cache.hasMore)
-            }
+            activeDialog?.get()?.takeIf { it.seriesId == seriesId }
+                ?.onState(state, info, cache.comments.size, cache.hasMore)
         }
     }
 
     private fun notifyComments(seriesId: String, info: String) {
         main.post {
-            activeDialog?.get()?.takeIf { it.seriesId == seriesId }?.let { d ->
-                d.onState(State.COLLECTING, info, caches[seriesId]?.comments?.size ?: 0, true)
-            }
+            activeDialog?.get()?.takeIf { it.seriesId == seriesId }
+                ?.onState(State.COLLECTING, info, caches[seriesId]?.comments?.size ?: 0, true)
         }
     }
 }

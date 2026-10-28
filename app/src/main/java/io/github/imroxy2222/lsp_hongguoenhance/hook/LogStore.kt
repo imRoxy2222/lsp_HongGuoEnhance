@@ -199,7 +199,9 @@ object LogStore {
         try {
             val now = System.currentTimeMillis()
             val arr = JSONArray()
-            for (t in tags) arr.put(JSONObject().put("tag", t.text).put("count", t.count))
+            for (t in tags) arr.put(
+                JSONObject().put("tag", t.text).put("count", t.count).put("negative", t.negative)
+            )
             val w = d.writableDatabase
             w.beginTransaction()
             try {
@@ -298,7 +300,12 @@ object LogStore {
                 val tags = ArrayList<AiClient.Tag>(arr.length())
                 for (i in 0 until arr.length()) {
                     val o = arr.getJSONObject(i)
-                    tags.add(AiClient.Tag(o.getString("tag"), o.getInt("count")))
+                    tags.add(
+                        AiClient.Tag(
+                            o.getString("tag"), o.getInt("count"),
+                            o.optBoolean("negative", false)
+                        )
+                    )
                 }
                 CachedSummary(tags, c.getInt(1), c.getLong(2))
             }
