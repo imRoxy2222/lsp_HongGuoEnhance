@@ -339,7 +339,8 @@ object Pipeline {
             updateState(seriesId, State.ERROR, "AI 总结失败：$hint")
             return
         }
-        // 增量模式：与旧词条合并计数（同名词条 count 相加），再按数量降序；
+        // 增量模式：与旧词条合并计数（同名词条 count 相加），再排序；
+        // 排序规则：count 降序，count 相同时负面词条（negative=true）在前；
         // negative 按或合并——同一词条任意一次被标注为负面即视为负面
         val mergedTags: List<AiClient.Tag> = if (incremental) {
             val merged = LinkedHashMap<String, AiClient.Tag>()
@@ -350,7 +351,7 @@ object Pipeline {
             }
             for (t in oldTags) add(t)
             for (t in result.tags) add(t)
-            merged.values.sortedByDescending { it.count }
+            merged.values.sortedWith(AiClient.Tag.COMPARATOR)
         } else {
             result.tags
         }

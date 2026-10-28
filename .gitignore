@@ -17,3 +17,6 @@ local.properties
 *.tmp
 *.jks
 *.b64
+
+# Kotlin 编译器会话文件
+.kotlin/

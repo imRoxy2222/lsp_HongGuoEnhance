@@ -24,7 +24,13 @@ object AiClient {
     /**
      * 词条：negative=true 表示负面评价词条（AI 未标注时为 false）。
      */
-    data class Tag(val text: String, val count: Int, val negative: Boolean = false)
+    data class Tag(val text: String, val count: Int, val negative: Boolean = false) {
+        companion object {
+            /** 展示排序：主序 count 降序；count 相同时负面词条（negative=true）排在前面。 */
+            val COMPARATOR = compareByDescending<Tag> { it.count }
+                .thenByDescending { it.negative }
+        }
+    }
 
     /** 一次 AI 调用的完整结果：词条 + 发送的请求体 + 原始响应（日志用）。 */
     data class AiResult(val tags: List<Tag>, val request: String, val response: String)
@@ -235,7 +241,7 @@ object AiClient {
         }
         if (tags.isEmpty()) throw AiException("AI 未返回有效词条: ${content.take(200)}")
         Log.i(TAG, "AI tags: ${tags.size}")
-        return tags.sortedByDescending { it.count }
+        return tags.sortedWith(Tag.COMPARATOR)
     }
 
     /** 容错提取 JSON（去掉 markdown 围栏/前后说明文字）。 */

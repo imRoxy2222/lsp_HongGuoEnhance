@@ -317,7 +317,12 @@ object LogStore {
                         )
                     )
                 }
-                CachedSummary(tags, c.getInt(1), c.getLong(2))
+                // 恢复时重排：count 降序、count 相同负面在前（历史记录落库时可能未做负面平局排序）
+                CachedSummary(
+                    tags.sortedWith(AiClient.Tag.COMPARATOR),
+                    c.getInt(1),
+                    c.getLong(2)
+                )
             }
         } catch (t: Throwable) {
             Logger.e("log loadLatestSummary failed: $seriesId", t)
