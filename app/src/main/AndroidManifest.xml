@@ -44,6 +44,14 @@
             android:exported="false"
             android:label="评论词条日志"
             android:theme="@style/Theme.HongGuoEnhance" />
+
+        <!-- AI 进程桥：宿主(红果)进程经 ContentResolver.call 把 AI 请求交给
+             模块进程执行，代理白名单只需放行模块应用。exported 但 Provider
+             内部校验调用方 UID 必须为 com.phoenix.read。 -->
+        <provider
+            android:name=".hook.AiBridgeProvider"
+            android:authorities="io.github.imroxy2222.lsp_hongguoenhance.aibridge"
+            android:exported="true" />
     </application>
 
 </manifest>

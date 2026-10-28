@@ -125,10 +125,10 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     onSave = { baseUrl, apiKey, model, targetCount, pageCount, extraPrompt,
-                               logRetentionDays, logMaxSizeMb, disableThinking ->
+                               logRetentionDays, logMaxSizeMb, disableThinking, aiViaModule ->
                         saveConfig(
                             baseUrl, apiKey, model, targetCount, pageCount, extraPrompt,
-                            logRetentionDays, logMaxSizeMb, disableThinking
+                            logRetentionDays, logMaxSizeMb, disableThinking, aiViaModule
                         )
                     },
                     onOpenLogs = {
@@ -174,6 +174,9 @@ class MainActivity : ComponentActivity() {
             ),
             ModuleConfig.KEY_DISABLE_THINKING to p.getBoolean(
                 ModuleConfig.KEY_DISABLE_THINKING, ModuleConfig.DEFAULT_DISABLE_THINKING
+            ),
+            ModuleConfig.KEY_AI_VIA_MODULE to p.getBoolean(
+                ModuleConfig.KEY_AI_VIA_MODULE, ModuleConfig.DEFAULT_AI_VIA_MODULE
             )
         )
     }
@@ -182,7 +185,7 @@ class MainActivity : ComponentActivity() {
         baseUrl: String, apiKey: String, model: String,
         targetCount: Int, pageCount: Int, extraPrompt: String,
         logRetentionDays: Int, logMaxSizeMb: Int,
-        disableThinking: Boolean,
+        disableThinking: Boolean, aiViaModule: Boolean,
     ) {
         val s = service
         if (s == null) {
@@ -200,6 +203,7 @@ class MainActivity : ComponentActivity() {
             .putInt(ModuleConfig.KEY_LOG_RETENTION_DAYS, logRetentionDays)
             .putInt(ModuleConfig.KEY_LOG_MAX_SIZE_MB, logMaxSizeMb)
             .putBoolean(ModuleConfig.KEY_DISABLE_THINKING, disableThinking)
+            .putBoolean(ModuleConfig.KEY_AI_VIA_MODULE, aiViaModule)
             .apply()
         Toast.makeText(this, "已保存，重启红果短剧后生效", Toast.LENGTH_SHORT).show()
     }
@@ -212,7 +216,7 @@ fun SettingsScreen(
     launcherHidden: Boolean,
     initial: Map<String, Any>?,
     onScopeRequest: () -> Unit,
-    onSave: (String, String, String, Int, Int, String, Int, Int, Boolean) -> Unit,
+    onSave: (String, String, String, Int, Int, String, Int, Int, Boolean, Boolean) -> Unit,
     onOpenLogs: () -> Unit,
     onHideIconChange: (Boolean) -> Unit,
 ) {
@@ -241,6 +245,12 @@ fun SettingsScreen(
         mutableStateOf(
             (initial?.get(ModuleConfig.KEY_DISABLE_THINKING) as? Boolean)
                 ?: ModuleConfig.DEFAULT_DISABLE_THINKING
+        )
+    }
+    var aiViaModule by remember(initial) {
+        mutableStateOf(
+            (initial?.get(ModuleConfig.KEY_AI_VIA_MODULE) as? Boolean)
+                ?: ModuleConfig.DEFAULT_AI_VIA_MODULE
         )
     }
     var logRetentionDays by remember(initial) {
@@ -362,6 +372,27 @@ fun SettingsScreen(
                         onCheckedChange = { disableThinking = it }
                     )
                 }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("AI 走模块进程", style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.width(6.dp))
+                    HelpBadge(
+                        title = "AI 走模块进程",
+                        help = "开启后 AI 请求由本模块自身的进程发出，而不是红果短剧进程。\n\n" +
+                            "用途：使用国外大模型时，代理/VPN 白名单只需放行本模块应用，" +
+                            "红果（视频流量大）无需走代理，节省流量。\n\n" +
+                            "注意：若本模块被系统强停（设置里\"强行停止\"或部分省电策略杀后台），" +
+                            "AI 总结会报\"进程桥不可用\"——打开一次模块设置页即可恢复；" +
+                            "关闭本开关则回到旧的宿主进程直连方式。"
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Switch(
+                        checked = aiViaModule,
+                        onCheckedChange = { aiViaModule = it }
+                    )
+                }
             }
 
             // ── 采集参数 ───────────────────────────────────────────────
@@ -465,7 +496,8 @@ fun SettingsScreen(
                             ?: ModuleConfig.DEFAULT_LOG_RETENTION_DAYS,
                         logMaxSizeMb.toIntOrNull()?.coerceIn(0, 4096)
                             ?: ModuleConfig.DEFAULT_LOG_MAX_SIZE_MB,
-                        disableThinking
+                        disableThinking,
+                        aiViaModule
                     )
                 },
                 modifier = Modifier.fillMaxWidth()

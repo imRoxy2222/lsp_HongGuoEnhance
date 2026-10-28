@@ -321,15 +321,22 @@ object Pipeline {
             else "正在调用 AI 分析 ${toSummarize.size} 条剧评..."
         )
         val result = try {
-            AiClient.summarize(
-                toSummarize, cache.seriesName,
-                // 增量模式：把已有词条发给 AI，让其优先沿用同名词条（便于合并）
-                if (incremental) oldTags.map { it.text } else emptyList()
-            )
+            val previous = if (incremental) oldTags.map { it.text } else emptyList()
+            if (ModuleConfig.aiViaModule()) {
+                // 进程桥模式：宿主组包，模块进程发 HTTP（代理只需放行模块应用）
+                AiBridge.summarize(toSummarize, cache.seriesName, previous)
+            } else {
+                AiClient.summarize(
+                    toSummarize, cache.seriesName,
+                    // 增量模式：把已有词条发给 AI，让其优先沿用同名词条（便于合并）
+                    previous
+                )
+            }
         } catch (t: Throwable) {
             Logger.e("ai summarize failed", t)
-            LogStore.appendError(seriesId, "AI 总结失败：${t.message ?: t.javaClass.simpleName}")
-            updateState(seriesId, State.ERROR, "AI 总结失败：${t.message ?: t.javaClass.simpleName}")
+            val hint = if (t is AiBridge.BridgeException) "\n提示：${t.message}" else t.message ?: t.javaClass.simpleName
+            LogStore.appendError(seriesId, "AI 总结失败：$hint")
+            updateState(seriesId, State.ERROR, "AI 总结失败：$hint")
             return
         }
         // 增量模式：与旧词条合并计数（同名词条 count 相加），再按数量降序；

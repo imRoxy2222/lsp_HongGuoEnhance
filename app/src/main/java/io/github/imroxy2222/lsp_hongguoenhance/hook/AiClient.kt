@@ -36,7 +36,21 @@ object AiClient {
         seriesName: String?,
         previousTags: List<String> = emptyList(),
     ): AiResult {
+        val requestText = buildRequestText(comments, seriesName, previousTags)
         val baseUrl = ModuleConfig.baseUrl().trimEnd('/')
+        val apiKey = ModuleConfig.apiKey()
+        return summarizeRaw(baseUrl, apiKey, requestText)
+    }
+
+    /**
+     * 组装完整的 /chat/completions 请求体（读取 ModuleConfig）。
+     * 独立出来供宿主进程组包后经进程桥发给模块进程执行。
+     */
+    fun buildRequestText(
+        comments: List<String>,
+        seriesName: String?,
+        previousTags: List<String> = emptyList(),
+    ): String {
         val apiKey = ModuleConfig.apiKey()
         if (apiKey.isEmpty()) throw AiException("尚未配置 API Key，请打开模块设置页配置")
 
@@ -51,10 +65,15 @@ object AiClient {
         }
         val msg = JSONObject().put("role", "user").put("content", userPrompt)
         body.getJSONArray("messages").put(msg)
-        val requestText = body.toString()
+        return body.toString()
+    }
 
-        // 网络层偶发断连（服务端/中间链路未返回任何响应字节即断开，
-        // 如 keep-alive 僵尸连接、代理重置）自动重试一次；仍失败才向上抛。
+    /**
+     * 用现成的请求体执行总结（不读配置，任何进程可调用）。
+     * 网络层偶发断连（服务端/中间链路未返回任何响应字节即断开，
+     * 如 keep-alive 僵尸连接、代理重置）自动重试一次；仍失败才向上抛。
+     */
+    fun summarizeRaw(baseUrl: String, apiKey: String, requestText: String): AiResult {
         var lastErr: IOException? = null
         repeat(2) { attempt ->
             try {

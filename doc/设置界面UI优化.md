@@ -31,10 +31,11 @@
 | 保留天数 | 0=不限，范围 0~3650，默认 30 |
 | 总大小上限 MB | 0=不限，范围 0~4096，默认 100 |
 
-"AI 接口配置"分组最底部另有 **取消思考** 复选框（默认开启），标题右侧同样带
-"?" 徽标，说明文案列出可生效平台（DeepSeek、OpenRouter、通义/DashScope、
-智谱 GLM、SiliconFlow、MiniMax、vLLM / SGLang 自部署等；OpenAI 官方接口
-自动忽略这些字段）。
+"AI 接口配置"分组最底部另有 **取消思考** 复选框（默认开启）与 **AI 走模块进程**
+开关（默认开启），标题右侧同样带"?" 徽标：前者说明文案列出可生效平台
+（DeepSeek、OpenRouter、通义/DashScope、智谱 GLM、SiliconFlow、MiniMax、
+vLLM / SGLang 自部署等；OpenAI 官方接口自动忽略这些字段）；后者说明 AI 请求
+改由模块进程发出的用途（代理白名单只需放行模块）与强停后的恢复方式。
 
 ### 2. Material3 整体重排
 

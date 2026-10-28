@@ -32,6 +32,27 @@ Content-Type: application/json
 任何兼容 OpenAI 协议的服务均可使用（DeepSeek、通义、Kimi、本地 Ollama+代理等），
 设置页中 `Base URL` 填到 `/v1` 为止，模块自动拼接 `/chat/completions`。
 
+## 调用进程（AI 进程桥，AiBridge / AiBridgeProvider）
+
+HTTP 请求默认**从模块自身进程发出**而非红果进程（设置页"AI 接口配置"最底部的
+**AI 走模块进程** 开关，默认开启）：
+
+- **目的**：使用国外大模型时，代理/VPN 白名单只需放行模块应用；
+  红果（视频流量大）无需走代理，节省流量。
+- **通道**：宿主进程用 `AiClient.buildRequestText` 组好完整请求体，
+  经 `ContentResolver.call()` 发给模块的 `AiBridgeProvider`（authority
+  `io.github.imroxy2222.lsp_hongguoenhance.aibridge`），Provider 在模块进程内
+  调 `AiClient.summarizeRaw` 执行请求，词条与原始响应同步带回。
+  选 ContentProvider 而非 Service/Broadcast：call() 会自动拉起模块进程、
+  无广播 10 秒限制、可同步返回。
+- **安全**：Provider exported，但 `call()` 内校验调用方 UID 必须为宿主
+  `com.phoenix.read`，防止其他应用借用 API Key。
+- **失败提示**：模块被系统强停（设置里"强行停止"或省电策略杀后台）时，
+  AI 总结报"AI 进程桥不可用"——打开一次模块设置页即可恢复；
+  也可关闭开关回到宿主进程直连（`AiClient.summarize`）。
+- **日志**：`LogStore.appendTags` 的请求/响应记录与直连模式完全一致
+  （请求体由宿主组包后原样回传，响应由 Provider 带回）。
+
 ## 关闭思考模式（AiClient.putDisableThinking）
 
 词条总结只需输出固定格式的 JSON，不需要模型深度推理，开启思考只会白白增加
