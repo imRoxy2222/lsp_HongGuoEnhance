@@ -38,6 +38,12 @@ object XposedServiceHolder {
                 runCatching {
                     FrameworkEnv.update(s.frameworkName, s.frameworkVersion, s.frameworkProperties)
                 }
+                // 模块 App 进程侧初始化 ModuleConfig（过滤规则页经其读写 remote prefs；
+                // 不初始化会导致 setExcludeRuleItems 静默丢写）
+                runCatching {
+                    io.github.imroxy2222.lsp_hongguoenhance.hook.ModuleConfig
+                        .init(s.getRemotePreferences(io.github.imroxy2222.lsp_hongguoenhance.hook.ModuleConfig.PREFS_NAME))
+                }
                 listeners.forEach { runCatching { it.onServiceChanged(s) } }
             }
 

@@ -109,6 +109,18 @@ object ModuleConfig {
         }
     }
 
+    /**
+     * 模块 App 进程侧初始化：设置页经 XposedService.getRemotePreferences
+     * 拿到的是与宿主侧同一份存储（同名 prefs），读写互通。
+     * 若不调用（如过滤规则页直接用本类写入），prefs 为 null 会导致
+     * `prefs?.edit()` 空安全链静默跳过——写入丢失且无任何报错。
+     */
+    fun init(remote: SharedPreferences) {
+        if (prefs == null) {
+            prefs = remote
+        }
+    }
+
     private fun p(): SharedPreferences =
         prefs ?: throw IllegalStateException("ModuleConfig not initialized")
 
