@@ -9,10 +9,12 @@ push 代码到 master ──→ (不触发任何构建)
                           │                          ▼
               GitHub Actions 自动执行:
               1. 校验 tag 递增: vN 必须已存在 v(N-1) (v1 除外), 否则失败不打包
-              2. 打包 APK (versionCode/versionName = 最近 v* tag 数字, 即 N)
-              3. 校验 APK 内 versionCode == tag 数字 (硬校验)
-              4. 在本仓库创建 Release, 上传 HongGuoEnhance-v<N>.apk
-              5. 在 LSPosed 为你创建的模块仓库里创建同名 Release 并上传同一 APK
+              2. 生成更新日志: v(N-1)..vN 区间的全部 commit message
+                 (v1 无前置 tag 时为全量历史)
+              3. 打包 APK (versionCode/versionName = 最近 v* tag 数字, 即 N)
+              4. 校验 APK 内 versionCode == tag 数字 (硬校验)
+              5. 在本仓库创建 Release, 上传 HongGuoEnhance-v<N>.apk, 正文 = 更新日志
+              6. 在 LSPosed 为你创建的模块仓库里创建同名 Release 并上传同一 APK, 正文 = 更新日志
 ```
 
 LSPosed 仓库不放代码，只放 Release 文件、README、summary 等少量信息；所有版本检测都基于 APK 内 `META-INF/xposed/module.prop` 的 `versionCode`。
@@ -102,6 +104,15 @@ $env:RELEASE_KEY_PASSWORD = "你的key密码"
 - 任何包 ↔ debug 包（`installDebug` 或未配 secrets 时 CI 的产物）：签名冲突，不能覆盖安装。
 - keystore 文件（`.jks` / `.b64`）已在 `.gitignore` 中，放置于项目根目录不会被提交，但建议移到代码区外并备份。
 
+## Release 正文（更新日志）
+
+本仓库与 LSPosed 仓库的 Release 正文共用同一份基于 commit message 的更新日志，由工作流的 **Generate changelog** 步骤生成：
+
+- 范围：`v(N-1)..vN` 区间的全部提交（`v1` 无前置 tag 时为全量历史），格式为 `- <短hash> <commit 标题>`；
+- 区间内无提交（如重打同一提交的 tag）时显示「无新增提交 (重新发布)」；
+- 本仓库 Release 不再使用 `--generate-notes`（旧方式只显示一条 compare 链接）；
+- 重发同一 tag 时（Release 已存在的分支），除覆盖上传 APK 外还会用 `gh release edit` 刷新正文，保持日志同步。
+
 ## 同步发布到 LSPosed 模块仓库
 
 前提（对应你申请通过后 LSPosed 为你建的仓库）：
@@ -114,7 +125,7 @@ $env:RELEASE_KEY_PASSWORD = "你的key密码"
 
 2. 添加 secret `LSPOSED_TOKEN`：一个对上述仓库有 **Contents 读写** 权限的 PAT（Fine-grained token 只勾选该仓库的 `Contents: Read and write`；classic token 勾 `repo`）。默认的 `GITHUB_TOKEN` 无权跨仓库发布，所以需要 PAT。
 
-配置后每次打 tag，工作流最后一步会在 LSPosed 仓库自动创建同名 tag + Release 并上传 APK（Release 描述为镜像说明）。若未配置 `LSPOSED_REPO`，该步自动跳过，仅发布到本仓库。
+配置后每次打 tag，工作流最后一步会在 LSPosed 仓库自动创建同名 tag + Release 并上传 APK（Release 正文与主仓库一致，为 commit message 更新日志）。若未配置 `LSPOSED_REPO`，该步自动跳过，仅发布到本仓库。
 
 > README / summary 等少量静态信息建议直接在 LSPosed 仓库里维护（Action 不会覆盖它们，只动 Release）。
 

@@ -1,4 +1,4 @@
-# 发布流程: 打 v* tag -> 校验 tag 递增 (vN 必须存在 vN-1) -> 打包 APK -> 本仓库创建 Release -> 同步发布到 LSPosed 模块仓库 (tag 固定为 VersionCode-VersionName)
+# 发布流程: 打 v* tag -> 校验 tag 递增 (vN 必须存在 vN-1) -> 生成 commit message 更新日志 -> 打包 APK -> 本仓库创建 Release (正文=changelog) -> 同步发布到 LSPosed 模块仓库 (tag 固定为 VersionCode-VersionName, 正文=changelog)
 name: Release APK
 
 on:
@@ -34,6 +34,34 @@ jobs:
             exit 1
           fi
           echo "tag 校验通过: $TAG (版本号 $N)"
+
+      # 生成基于 commit message 的更新日志:
+      # vN 相对 v(N-1) 的全部提交 (v1 无前置 tag 时为全量历史),
+      # 本仓库 Release 与 LSPosed 仓库 Release 正文共用这一份 changelog
+      - name: Generate changelog
+        id: changelog
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          N="${TAG#v}"
+          if [ "$N" -gt 1 ] && git rev-parse -q --verify "refs/tags/v$((N-1))" >/dev/null; then
+            RANGE="v$((N-1))..${TAG}"
+          else
+            RANGE="${TAG}"
+          fi
+          LOG=$(git log "${RANGE}" --no-decorate --pretty=format:"- %h %s")
+          if [ -z "$LOG" ]; then
+            LOG="- 无新增提交 (重新发布)"
+          fi
+          {
+            echo "notes<<CHANGELOG_EOF"
+            echo "## 更新日志"
+            echo ""
+            echo "$LOG"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "changelog 预览:"
+          echo "$LOG"
 
       - name: Setup JDK
         uses: actions/setup-java@v4
@@ -92,34 +120,32 @@ jobs:
           fi
           echo "versionCode=$VCODE 与 tag 一致"
 
+      # Release 正文 = commit message 更新日志 (不再使用 --generate-notes 的对比链接)
       - name: Create Release (this repo)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
+          NOTES: ${{ steps.changelog.outputs.notes }}
         run: |
-          gh release create "$TAG" --title "$TAG" --generate-notes dist/HongGuoEnhance-*.apk \
-            || { echo "Release 已存在, 改为覆盖上传资源"; gh release upload "$TAG" --clobber dist/HongGuoEnhance-*.apk; }
+          gh release create "$TAG" --title "$TAG" --notes "$NOTES" dist/HongGuoEnhance-*.apk \
+            || { echo "Release 已存在, 覆盖上传资源并刷新正文"; gh release upload "$TAG" --clobber dist/HongGuoEnhance-*.apk; gh release edit "$TAG" --notes "$NOTES"; }
 
       # 同步发布到 LSPosed 模块仓库 (只放 release/readme, 不放代码)
       # 前提: 仓库变量 LSPOSED_REPO = LSPosed 模块仓库的 owner/name; secret LSPOSED_TOKEN = 对其有写权限的 PAT
       # 注意: LSPosed 仓库的 Release tag 必须为 VersionCode-VersionName (如 15-15),
-      #       直接用 v15 会被 bot 判定无效; Release 标题 = 版本名, 正文 = 更新日志
+      #       直接用 v15 会被 bot 判定无效; Release 标题 = 版本名, 正文 = commit message 更新日志
       - name: Publish Release to LSPosed module repo
         if: ${{ vars.LSPOSED_REPO != '' }}
         env:
           GH_TOKEN: ${{ secrets.LSPOSED_TOKEN }}
           LSPOSED_REPO: ${{ vars.LSPOSED_REPO }}
           TAG: ${{ github.ref_name }}
+          NOTES: ${{ steps.changelog.outputs.notes }}
         run: |
           VCODE=$(grep '^versionCode=' app/build/generated/moduleProp/META-INF/xposed/module.prop | cut -d= -f2)
           VNAME=$(grep '^version=' app/build/generated/moduleProp/META-INF/xposed/module.prop | cut -d= -f2)
           LSTAG="${VCODE}-${VNAME}"
           echo "LSPosed release tag: $LSTAG (versionCode=$VCODE, versionName=$VNAME)"
-          NOTES=$(cat <<'EOF'
-          > HongGuoEnhance 发布镜像。源码与构建过程见主仓库 (sourceUrl)。
-          > LSPosed 模块仓库经 module.prop 中的 versionCode 识别更新。
-          EOF
-          )
           # 兼容历史错误 tag (vN): 删除旧格式 release 及其 tag, 重建为 VersionCode-VersionName
           if gh release view "$TAG" --repo "$LSPOSED_REPO" >/dev/null 2>&1; then
             echo "发现旧格式 release $TAG, 删除重建"
@@ -131,4 +157,5 @@ jobs:
           else
             # 官方注意: 仅覆盖资产不会触发 bot 更新 tag/版本; 需更新版本信息时应编辑 release 正文或删除重建
             gh release upload "$LSTAG" --repo "$LSPOSED_REPO" --clobber dist/HongGuoEnhance-*.apk
+            gh release edit "$LSTAG" --repo "$LSPOSED_REPO" --notes "$NOTES"
           fi
