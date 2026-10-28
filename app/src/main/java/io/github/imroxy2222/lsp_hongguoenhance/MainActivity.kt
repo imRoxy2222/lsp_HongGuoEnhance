@@ -45,12 +45,16 @@ class MainActivity : ComponentActivity() {
     private val serviceReady = mutableStateOf(false)
     private val initialConfig = mutableStateOf<Map<String, Any>?>(null)
     private val launcherHidden = mutableStateOf(false)
+    private val rootFramework = mutableStateOf(true)
+    private val frameworkLabel = mutableStateOf<String?>(null)
 
     /** 订阅进程级服务状态（XposedServiceHelper 只支持单一 listener，禁止页面各自注册）。 */
     private val serviceListener = object : XposedServiceHolder.Listener {
         override fun onServiceChanged(s: XposedService?) {
             service = s
             serviceReady.value = s != null
+            rootFramework.value = FrameworkEnv.isRootFramework()
+            frameworkLabel.value = FrameworkEnv.displayName()
             if (s != null) {
                 ensureLogToken(s)
                 initialConfig.value = loadPrefs(s)
@@ -72,6 +76,8 @@ class MainActivity : ComponentActivity() {
                     serviceReady = serviceReady.value,
                     launcherHidden = launcherHidden.value,
                     initial = initialConfig.value,
+                    rootFramework = rootFramework.value,
+                    frameworkLabel = frameworkLabel.value,
                     onScopeRequest = {
                         val s = service
                         if (s == null) {
@@ -190,7 +196,7 @@ class MainActivity : ComponentActivity() {
     ) {
         val s = service
         if (s == null) {
-            Toast.makeText(this, "LSPosed 服务未连接，无法保存", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "框架服务未连接，无法保存", Toast.LENGTH_LONG).show()
             return
         }
         val prefs = s.getRemotePreferences(ModuleConfig.PREFS_NAME)
@@ -217,6 +223,8 @@ fun SettingsScreen(
     serviceReady: Boolean,
     launcherHidden: Boolean,
     initial: Map<String, Any>?,
+    rootFramework: Boolean,
+    frameworkLabel: String?,
     onScopeRequest: () -> Unit,
     onSave: (String, String, String, Int, Int, String, Int, Int, Boolean, Boolean, Set<String>) -> Unit,
     onOpenLogs: () -> Unit,
@@ -370,7 +378,7 @@ fun SettingsScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "LSPosed 框架服务",
+                            frameworkLabel ?: "LSPosed 框架服务",
                             style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier.weight(1f)
                         )
@@ -390,12 +398,21 @@ fun SettingsScreen(
                     }
                     Text(
                         if (serviceReady) "配置读写可用 · 修改后自动保存"
-                        else "未检测到 LSPosed 服务，自动保存不可用；请确认已在 LSPosed 中启用本模块",
+                        else "未检测到框架服务，自动保存不可用；请确认已在 LSPosed 或 LSPatch（Manager 模式）中启用本模块",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    OutlinedButton(onClick = onScopeRequest, modifier = Modifier.fillMaxWidth()) {
-                        Text("申请红果短剧作用域 (com.phoenix.read)")
+                    if (rootFramework) {
+                        OutlinedButton(onClick = onScopeRequest, modifier = Modifier.fillMaxWidth()) {
+                            Text("申请红果短剧作用域 (com.phoenix.read)")
+                        }
+                    } else {
+                        Text(
+                            "免 Root（LSPatch）模式：作用域在打包时已固定，无需申请；" +
+                                    "如未生效请用 LSPatch 管理器重新打包勾选本模块",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
@@ -615,24 +632,33 @@ fun SettingsScreen(
 
             // ── 应用 ───────────────────────────────────────────────────
             SettingsSection(title = "应用") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("隐藏桌面图标", style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            if (launcherHidden) "已隐藏 · 可在 LSPosed 管理器中重新打开"
-                            else "隐藏后在 LSPosed 管理器中打开本模块",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                if (rootFramework) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("隐藏桌面图标", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                if (launcherHidden) "已隐藏 · 可在 LSPosed 管理器中重新打开"
+                                else "隐藏后在 LSPosed 管理器中打开本模块",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = launcherHidden,
+                            onCheckedChange = { checked ->
+                                if (checked) showHideConfirm = true else onHideIconChange(false)
+                            }
                         )
                     }
-                    Switch(
-                        checked = launcherHidden,
-                        onCheckedChange = { checked ->
-                            if (checked) showHideConfirm = true else onHideIconChange(false)
-                        }
+                } else {
+                    Text("隐藏桌面图标", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "免 Root（LSPatch）模式下没有 LSPosed 管理器入口，隐藏后将无法重新打开设置页，该功能不可用。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
