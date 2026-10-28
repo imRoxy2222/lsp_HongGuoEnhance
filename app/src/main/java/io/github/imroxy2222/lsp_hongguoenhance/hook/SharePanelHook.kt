@@ -35,14 +35,18 @@ object SharePanelHook {
         hookSaasVideoData(xposed, cl)
         hookPlayletCommentPage(xposed, cl)
         hookShortSeriesPage(xposed, cl)
+        ShareButtonUiHook.install(xposed, cl)
     }
 
-    /** 拦截分享面板调用：ShortSeriesActivity 内弹"评论词条"页，其余场景放行。 */
+    /** 拦截分享面板调用：ShortSeriesActivity 内弹"评论词条"页，主页(MainFragmentActivity)仅 Toast 提示，其余场景放行。 */
     private fun hookSharePanel(xposed: XposedInterface, cl: ClassLoader) {
         try {
             val proxyCls = cl.loadClass("com.dragon.read.component.biz.api.NsShareProxy")
             val shortSeriesCls =
                 cl.loadClass("com.dragon.read.component.shortvideo.impl.ShortSeriesActivity")
+            val mainFragmentCls = runCatching {
+                cl.loadClass("com.dragon.read.pages.main.MainFragmentActivity")
+            }.getOrNull()
             val sharePanelCls =
                 cl.loadClass("com.bytedance.ug.sdk.share.impl.ui.panel.ISharePanel")
             val lm3g = cl.loadClass("lm3.g")
@@ -52,7 +56,19 @@ object SharePanelHook {
             )
             xposed.hook(method).intercept { chain ->
                 val activity = chain.getArg(0) as? Activity
-                if (activity != null && shortSeriesCls.isInstance(activity)) {
+                if (activity != null) {
+                    // 信息流主页的分享按钮与播放页同构（同 id hq0，UI 已替换为 AI总结），
+                    // 但 AI 总结需进入剧集才能确定目标剧：仅 Toast 提示，
+                    // 不弹词条页（SeriesIdHolder 可能残留其他剧的 id）、也不放行原分享面板
+                    if (mainFragmentCls != null && mainFragmentCls.isInstance(activity)) {
+                        activity.runOnUiThread {
+                            android.widget.Toast.makeText(
+                                activity, "需要进入剧集内才能触发AI总结", android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        return@intercept null
+                    }
+                    if (shortSeriesCls.isInstance(activity)) {
                     lastShareActivity = WeakReference(activity)
                     val model = chain.getArg(1)
                     if (model != null) {

@@ -73,3 +73,37 @@ xposed.hook(method).intercept { chain ->
 
 - `ek2.o` 为混淆类名，app 更新后混淆映射可能变化。方案 2/3 与其相互独立，
   即使方案 1 失效仍可工作；三路全失效时模块放行原分享面板，不会导致 app 异常。
+
+## 按钮 UI 改造：分享 → AI总结（ShareButtonUiHook.kt）
+
+面板被替换后按钮文案仍是"分享"、图标仍是分享箭头，语义不符。改造两处按钮的展示：
+
+| 项 | 原 | 新 |
+|---|---|---|
+| 文案 | `分享`（jqt 动态设置 / jqm XML `@string/ebj`） | `AI总结` |
+| 图标 | `@drawable/elf` 纯白实心曲线箭头（138px@xxhdpi ≈ 46dp 全幅） | AI 星芒（四角大星 + 右上小星，实心白） |
+
+### 图标实现
+
+不用位图资源（AI 生图风格难与矢量原图匹配），以 `Path` **程序化绘制** `Drawable`：
+24 单位坐标系内四角圆润凹边星芒，实心白填充（与 elf 同为纯白），
+intrinsic 46dp 与原图标一致，任意密度矢量级清晰；
+绘制时按 **90% 缩放居中**（`SCALE = 0.9`，ImageView `fitCenter` 会铺满视图，
+缩小只能在 draw 阶段做）。
+
+### 覆盖触发点（互相冗余）
+
+| 触发点 | 覆盖场景 |
+|---|---|
+| `ShortSeriesActivity.onResume` 后遍历 decorView（立即 + 800ms + 2500ms） | 主页面已存在按钮 |
+| `Dialog.show` 后遍历弹窗 decorView（context 为 ThemeWrapper 时解包判断） | 选集弹窗底栏 c96 |
+| `View.onAttachedToWindow` hook（ImageView 且父 id=hq0 才动作） | 翻集时新 inflate 的按钮（XML 静态 src 不走 setImageResource 公开路径） |
+| `TextView.setText(CharSequence, BufferType)` hook（id=jqt/jqm 且文案为"分享"） | 宿主运行时动态绑定文案的时机 |
+
+### 定位与门控
+
+- 目标 id（`hq0`/`jqt`/`jqm`）用 `Resources.getIdentifier` 从宿主资源解析（单次缓存）；
+  `hq0` 仅存在于 d8w/c96 两个布局，`jqt`/`jqm` 叠加"文案 == 分享"字符串门控，
+  不影响宿主其它视图；
+- 所有替换幂等，重复触发无副作用；任一环节失败静默降级，按钮保持原样，
+  点击仍走 `showShortSeriesSharePanel` 拦截（功能不受影响）。

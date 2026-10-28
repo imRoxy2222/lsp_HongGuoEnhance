@@ -40,7 +40,7 @@ object ModuleConfig {
      */
     val DEFAULT_EXCLUDE_RULES = listOf(
         FilterRule("[\\s\\S]{15,}", "字数下限：评论少于 15 字即丢弃"),
-        FilterRule("第.+季", "剧名/续季宣传语（如\"等第3季\"）"),
+        FilterRule("[快出].*第.+季", "剧名/续季宣传语,容易误伤,酌情设置"),
         FilterRule("更新", "催更、版本更新讨论"),
     )
 
@@ -66,6 +66,7 @@ object ModuleConfig {
                         val p = e.optString("pattern")
                         if (p.isNotEmpty()) FilterRule(p, e.optString("note")) else null
                     }
+
                     else -> null
                 }
             }
