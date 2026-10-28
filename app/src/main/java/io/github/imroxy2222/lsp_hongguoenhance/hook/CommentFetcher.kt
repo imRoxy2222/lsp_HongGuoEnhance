@@ -41,7 +41,7 @@ object CommentFetcher {
      * 命中任一即丢弃。每页解析时实时读取配置——设置页保存后无需重启宿主。
      * 无效正则跳过（不因坏规则中断采集）。
      *
-     * 字数下限过滤同样由规则实现（默认规则 1 = [\s\S]{15,}，即少于 15 字丢弃），
+     * 字数下限过滤同样由规则实现（默认规则 1 = \A[\s\S]{0,14}\z，即少于 15 字丢弃），
      * 不再硬编码；用户清空全部规则 = 不做任何过滤。
      */
     private fun excludePatterns(): List<Pair<Int, Regex>> =
@@ -310,7 +310,7 @@ object CommentFetcher {
      * 过滤判定：返回 null = 保留（未命中任何排除规则）；
      * 非 null = 丢弃原因，格式"命中过滤器Z,规则XXXX"
      * （Z 为用户规则的顺序编号 1,2,3...，XXXX 为命中时的正则原文，
-     * 如"命中过滤器1,规则[\s\S]{15,}"）。
+     * 如"命中过滤器1,规则\A[\s\S]{0,14}\z"）。
      */
     private fun dropReason(t: String): String? {
         excludePatterns().forEach { (index, regex) ->

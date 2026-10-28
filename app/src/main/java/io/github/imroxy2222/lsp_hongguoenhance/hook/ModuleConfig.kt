@@ -34,12 +34,13 @@ object ModuleConfig {
 
     /**
      * 未配置时的内置默认规则（顺序即过滤器编号）：
-     * 1. 字数下限（[\s\S]{15,}，containsMatchIn 语义等价"少于 15 字丢弃"，
-     *    取代旧的硬编码 MIN_TEXT_LENGTH=15）；
-     * 2/3. 历史内置排除规则（剧名/续季宣传语、催更/版本讨论）。
+     * 1. 字数下限（\A[\s\S]{0,14}\z 全串锚定，containsMatchIn 语义等价
+     *    "少于 15 字丢弃"；注意 Java 正则不支持 {,n} 省略下界写法，
+     *    也不能用裸 {15,}——containsMatchIn 下会把 ≥15 字的评论全命中）；
+     * 2. 剧名/续季宣传语。
      */
     val DEFAULT_EXCLUDE_RULES = listOf(
-        FilterRule("[\\s\\S]{,15}", "字数下限：评论少于 15 字即丢弃"),
+        FilterRule("\\A[\\s\\S]{0,14}\\z", "字数下限：评论少于 15 字即丢弃"),
         FilterRule("[快出].*第.+季", "剧名/续季宣传语,容易误伤,酌情设置"),
     )
 

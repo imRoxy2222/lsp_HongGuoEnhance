@@ -72,7 +72,7 @@ private class SeriesEntry(
 /**
  * 单条评论记录。
  * @param reason 丢弃原因（used=false 时有效）：如"命中过滤器2,规则更新"、
- *                "命中过滤器1,规则[\s\S]{15,}"（字数下限也是一条规则）；
+ *                "命中过滤器1,规则\A[\s\S]{0,14}\z"（字数下限也是一条规则）；
  *                旧版本记录无此字段为 null，展示时回退为通用文案。
  */
 private data class CommentRec(val time: Long, val text: String, val used: Boolean, val reason: String? = null)
