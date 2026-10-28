@@ -6,21 +6,25 @@
 push 代码到 master ──→ (不触发任何构建)
                           │
 你觉得可以发版了 ──→ git tag v<N> && git push origin v<N>
-                          │
-                          ▼
+                          │                          ▼
               GitHub Actions 自动执行:
-              1. 打包 APK (versionCode/versionName = commit 次数)
-              2. 在本仓库创建 Release, 上传 HongGuoEnhance-v<N>.apk
-              3. 在 LSPosed 为你创建的模块仓库里创建同名 Release 并上传同一 APK
+              1. 校验 tag 递增: vN 必须已存在 v(N-1) (v1 除外), 否则失败不打包
+              2. 打包 APK (versionCode/versionName = 最近 v* tag 数字, 即 N)
+              3. 校验 APK 内 versionCode == tag 数字 (硬校验)
+              4. 在本仓库创建 Release, 上传 HongGuoEnhance-v<N>.apk
+              5. 在 LSPosed 为你创建的模块仓库里创建同名 Release 并上传同一 APK
 ```
 
 LSPosed 仓库不放代码，只放 Release 文件、README、summary 等少量信息；所有版本检测都基于 APK 内 `META-INF/xposed/module.prop` 的 `versionCode`。
 
 ## 版本号机制
 
-- `versionCode` / `versionName` = 当前分支 commit 次数（见 [版本号自动升级](版本号自动升级.md)）。
-- `module.prop` 由构建任务 `generateModuleProp` 在打包时生成，同样写入 `versionCode=<commit 次数>`，并与 APK 一起进产物。**这是 LSPosed 仓库/管理器识别新版本的唯一依据。**
-- 因此 **tag 强烈建议命名为 `v<commit 次数>`**（如第 11 次提交打 `v11`）。Action 会自动校验 tag 与 versionCode 是否一致，不一致仅在日志中告警，不会阻断发布。
+- `versionCode` / `versionName` = 最近的 `v*` tag 数字（见 [版本号自动升级](版本号自动升级.md)），即 tag `v14` 构建出的 APK 版本号就是 14。
+- `module.prop` 由构建任务 `generateModuleProp` 在打包时生成，同样写入 `versionCode=<tag 数字>`，并与 APK 一起进产物。**这是 LSPosed 仓库/管理器识别新版本的唯一依据。**
+- **tag 必须按 v1 → v2 → v3 递增，禁止跳号**：工作流在打包前硬校验——
+  打 `vN` 时若 `v(N-1)` 不存在（`v1` 除外），Action 直接失败、不打包；
+  非 `v<纯数字>` 格式的 tag 同样失败。
+- 当前仓库已有 tag：`v1`、`v13`，因此**下一个合法 tag 是 `v14`**，之后 v15、v16 … 依此递增。
 
 ## 触发方式
 
@@ -28,7 +32,7 @@ LSPosed 仓库不放代码，只放 Release 文件、README、summary 等少量�
 # 日常开发
 git push origin master
 
-# 想发版时 (N = 当时的 commit 次数, 可先执行 git rev-list --count HEAD 确认)
+# 想发版时 (N = 上一个 tag 数字 + 1, 可先执行 git tag -l 'v*' 确认)
 git tag v<N>
 git push origin v<N>
 ```
@@ -127,7 +131,9 @@ $env:RELEASE_KEY_PASSWORD = "你的key密码"
 | --- | --- |
 | Actions 报 `./gradlew: Permission denied` | Windows 提交的 `gradlew` 缺少可执行位（git 索引为 `100644`）。修复：`git update-index --chmod=+x gradlew` 后提交推送。注意：**旧 tag 指向的提交仍是坏权限，必须在新提交上重新打 tag**，重推旧 tag 会再次失败 |
 | 想重新发同一个 tag | 先删远端 tag 与 Release（`gh release delete v<N> --yes && git push origin :refs/tags/v<N>`），重新打 tag 推送；或 Action 会自动走"Release 已存在 → 覆盖上传 APK"分支 |
-| tag 与 versionCode 不一致告警 | 正常，仅提醒命名规范。仓库更新检测以 APK 内 versionCode 为准；但请保证新 tag 的 versionCode **大于**上一个，否则 LSPosed 管理器不会提示更新 |
+| tag 与 versionCode 不一致报错 | 构建环境异常（理论上不可能：版本号就取自最近 tag）。工作流会阻断发布，检查 runner 上 checkout 的 tags 是否完整 |
+| 打 tag 后 Action 直接失败"缺少前置 tag" | **跳号发布被拦截**（如已有 v13 时直接打 v15）。补齐中间 tag 或改为 v14 顺延发布 |
+| 非 v\<数字\> 格式的 tag | 工作流校验失败，不打包。tag 只允许 `v1`、`v2` 这种纯数字递增格式 |
 | 用户覆盖安装失败提示签名不一致 | 发布签名中途换过 keystore。固定 keystore 并从第一次发布起使用 |
 | Actions 里 Gradle 报 SDK 缺失 | runner 自带 Android SDK，无需 `local.properties`；若 AGP 升级要求更高 SDK 版本，`gradle/actions/setup-gradle` 前加 `android-actions/setup-android@v3` |
 | LSPosed 仓库发布步骤被跳过 | 未配置 `LSPOSED_REPO` 变量或其为空，属预期行为 |
@@ -135,6 +141,6 @@ $env:RELEASE_KEY_PASSWORD = "你的key密码"
 
 ## 涉及文件
 
-- `.github/workflows/release.yml` — 工作流本体
-- `app/build.gradle.kts` — `generateModuleProp` 任务（生成 module.prop）+ CI 签名支持
+- `.github/workflows/release.yml` — 工作流本体（含 tag 递增硬校验）
+- `app/build.gradle.kts` — 版本号来源（最近 `v*` tag 数字）+ `generateModuleProp` 任务（生成 module.prop）+ CI 签名支持
 - `doc/版本号自动升级.md` — versionCode 来源

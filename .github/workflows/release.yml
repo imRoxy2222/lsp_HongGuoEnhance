@@ -1,4 +1,4 @@
-# 发布流程: 打 v* tag -> 打包 APK -> 本仓库创建 Release -> 同步发布到 LSPosed 模块仓库
+# 发布流程: 打 v* tag -> 校验 tag 递增 (vN 必须存在 vN-1) -> 打包 APK -> 本仓库创建 Release -> 同步发布到 LSPosed 模块仓库
 name: Release APK
 
 on:
@@ -16,8 +16,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # versionCode = commit 次数, 必须完整拉取历史, 否则永远是 1
+          # 版本号取自最近 v* tag + tag 递增校验需要全量历史与全部 tags
           fetch-depth: 0
+
+      # 硬校验: tag 必须为 v<纯数字>, 且 vN 必须存在前置 tag v(N-1) (v1 除外),
+      # 不满足直接失败, 不进入打包环节
+      - name: Validate tag sequence
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          case "$TAG" in
+            v[0-9]*) ;;
+            *) echo "::error::tag 必须为 v<纯数字> 格式 (如 v1、v2), 收到: $TAG"; exit 1 ;;
+          esac
+          N="${TAG#v}"
+          if [ "$N" -gt 1 ] && ! git rev-parse -q --verify "refs/tags/v$((N-1))" >/dev/null; then
+            echo "::error::缺少前置 tag v$((N-1)), 禁止跳号发布 (当前 $TAG)"
+            exit 1
+          fi
+          echo "tag 校验通过: $TAG (版本号 $N)"
 
       - name: Setup JDK
         uses: actions/setup-java@v4
@@ -65,14 +81,16 @@ jobs:
           cp "${{ steps.sign.outputs.apk_path }}" "dist/HongGuoEnhance-${TAG}.apk"
           ls -l dist/
 
-      # 仅告警不阻断: versionCode = commit 次数, tag 建议命名为 v<commit 次数>
-      - name: Check tag vs versionCode
+      # 硬校验: versionCode = 最近 v* tag 数字, 理论上恒等于 tag; 不一致说明构建环境异常, 阻断发布
+      - name: Verify versionCode matches tag
         run: |
           VCODE=$(grep '^versionCode=' app/build/generated/moduleProp/META-INF/xposed/module.prop | cut -d= -f2)
           TAG_NUM="${GITHUB_REF_NAME#v}"
           if [ "$TAG_NUM" != "$VCODE" ]; then
-            echo "::warning::tag ${GITHUB_REF_NAME} 与 APK 内 versionCode=${VCODE} 不一致, 建议 tag 命名为 v<commit 次数>"
+            echo "::error::APK 内 versionCode=${VCODE} 与 tag ${GITHUB_REF_NAME} 不一致"
+            exit 1
           fi
+          echo "versionCode=$VCODE 与 tag 一致"
 
       - name: Create Release (this repo)
         env:

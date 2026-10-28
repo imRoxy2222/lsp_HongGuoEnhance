@@ -6,29 +6,32 @@ plugins {
 import org.gradle.api.provider.ValueSource
 import org.gradle.api.provider.ValueSourceParameters
 
-// 获取当前分支 commit 次数作为版本号来源 (兼容 Configuration Cache)
-// 输出非整数或执行异常时返回 null, 由 getOrElse 回退为 1
-abstract class GitCommitCountSource : ValueSource<Int, GitCommitCountSource.Params> {
+// 版本号来源: 最近的 v* tag 的数字 (如 v14 → 14), 兼容 Configuration Cache。
+// CI 打 tag 发布时 HEAD 即该 tag, 版本号 = tag 数字; 本地开发时取祖先最近 tag。
+// 无任何可达 v* tag 或执行异常时返回 null, 由 getOrElse 回退为 1。
+abstract class GitTagVersionSource : ValueSource<Int, GitTagVersionSource.Params> {
     interface Params : ValueSourceParameters {
         val projectDir: Property<String>
     }
 
     override fun obtain(): Int? {
         return try {
-            val process = ProcessBuilder("git", "rev-list", "--count", "HEAD")
+            val process = ProcessBuilder(
+                "git", "describe", "--tags", "--match", "v*", "--abbrev=0"
+            )
                 .directory(File(parameters.projectDir.get()))
                 .redirectErrorStream(true)
                 .start()
             val output = process.inputStream.bufferedReader().readText().trim()
             process.waitFor()
-            output.toIntOrNull()
+            output.removePrefix("v").toIntOrNull()?.takeIf { process.exitValue() == 0 }
         } catch (e: Exception) {
             null
         }
     }
 }
 
-val commitCount = providers.of(GitCommitCountSource::class) {
+val appVersion = providers.of(GitTagVersionSource::class) {
     parameters.projectDir.set(rootDir.absolutePath)
 }.getOrElse(1)
 
@@ -37,7 +40,7 @@ val modulePropDir = layout.buildDirectory.dir("generated/moduleProp")
 
 abstract class GenerateModulePropTask : DefaultTask() {
     @get:Input
-    val commitCountValue: Property<Int> = project.objects.property(Int::class.java)
+    val versionValue: Property<Int> = project.objects.property(Int::class.java)
 
     @get:OutputDirectory
     val outputDir: DirectoryProperty = project.objects.directoryProperty()
@@ -50,8 +53,8 @@ abstract class GenerateModulePropTask : DefaultTask() {
             """
             id=io.github.imroxy2222.lsp_hongguoenhance
             name=我不赤石
-            version=${commitCountValue.get()}
-            versionCode=${commitCountValue.get()}
+            version=${versionValue.get()}
+            versionCode=${versionValue.get()}
             author=imroxy2222
             description=AI总结红果短剧类型Tag, 防止赤石
             minApiVersion=102
@@ -64,7 +67,7 @@ abstract class GenerateModulePropTask : DefaultTask() {
 }
 
 val generateModuleProp = tasks.register("generateModuleProp", GenerateModulePropTask::class) {
-    commitCountValue.set(commitCount)
+    versionValue.set(appVersion)
     outputDir.set(modulePropDir)
 }
 
@@ -78,8 +81,8 @@ android {
         applicationId = "io.github.imroxy2222.lsp_hongguoenhance"
         minSdk = 29
         targetSdk = 37
-        versionCode = commitCount
-        versionName = commitCount.toString()
+        versionCode = appVersion
+        versionName = appVersion.toString()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
