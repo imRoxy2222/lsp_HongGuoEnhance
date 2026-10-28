@@ -10,6 +10,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -23,6 +24,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import io.github.imroxy2222.lsp_hongguoenhance.hook.AiClient
 import io.github.imroxy2222.lsp_hongguoenhance.hook.ModuleConfig
@@ -128,6 +132,14 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
+    /** 设置页注册的 onPause 兜底保存（输入框未失焦就离开页面时，仍补一次自动保存）。 */
+    internal var pauseSaveHook: (() -> Unit)? = null
+
+    override fun onPause() {
+        pauseSaveHook?.invoke()
+        super.onPause()
+    }
+
     /** 生成日志服务访问令牌（仅首次；宿主进程读取同一配置校验请求）。 */
     private fun ensureLogToken(s: XposedService) {
         val p = s.getRemotePreferences(ModuleConfig.PREFS_NAME)
@@ -195,7 +207,7 @@ class MainActivity : ComponentActivity() {
             .putBoolean(ModuleConfig.KEY_AI_VIA_MODULE, aiViaModule)
             .putString(ModuleConfig.KEY_THINKING_PROVIDERS, thinkingProviders.joinToString(","))
             .apply()
-        Toast.makeText(this, "已保存，重启红果短剧后生效", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "已自动保存", Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -267,6 +279,59 @@ fun SettingsScreen(
     }
     var showHideConfirm by rememberSaveable { mutableStateOf(false) }
 
+    // ── 自动保存（脱离焦点 / 开关变更 / 离开页面时触发，签名去重） ──────────
+    val focusManager = LocalFocusManager.current
+
+    /** 当前表单按落盘口径归一化后的签名（与保存逻辑同一套默认值/范围收敛）。 */
+    fun savedSig(): String = listOf(
+        baseUrl.ifBlank { ModuleConfig.DEFAULT_BASE_URL },
+        apiKey.trim(),
+        model.ifBlank { ModuleConfig.DEFAULT_MODEL },
+        targetCount.toIntOrNull()?.coerceIn(10, 200) ?: ModuleConfig.DEFAULT_TARGET_COUNT,
+        pageCount.toIntOrNull()?.coerceIn(5, 30) ?: ModuleConfig.DEFAULT_PAGE_COUNT,
+        extraPrompt,
+        logRetentionDays.toIntOrNull()?.coerceIn(0, 3650)
+            ?: ModuleConfig.DEFAULT_LOG_RETENTION_DAYS,
+        logMaxSizeMb.toIntOrNull()?.coerceIn(0, 4096)
+            ?: ModuleConfig.DEFAULT_LOG_MAX_SIZE_MB,
+        thinkingProviders.sorted().joinToString(","),
+        aiViaModule
+    ).joinToString("\u0000")
+
+    /** 与初始加载配置对齐的基线签名：内容未变时不触发保存与 Toast。 */
+    var lastSavedSig by remember(initial) { mutableStateOf(savedSig()) }
+
+    fun autoSave() {
+        if (!serviceReady) return
+        val sig = savedSig()
+        if (sig == lastSavedSig) return
+        lastSavedSig = sig
+        onSave(
+            baseUrl.ifBlank { ModuleConfig.DEFAULT_BASE_URL },
+            apiKey,
+            model.ifBlank { ModuleConfig.DEFAULT_MODEL },
+            targetCount.toIntOrNull()?.coerceIn(10, 200)
+                ?: ModuleConfig.DEFAULT_TARGET_COUNT,
+            pageCount.toIntOrNull()?.coerceIn(5, 30)
+                ?: ModuleConfig.DEFAULT_PAGE_COUNT,
+            extraPrompt,
+            logRetentionDays.toIntOrNull()?.coerceIn(0, 3650)
+                ?: ModuleConfig.DEFAULT_LOG_RETENTION_DAYS,
+            logMaxSizeMb.toIntOrNull()?.coerceIn(0, 4096)
+                ?: ModuleConfig.DEFAULT_LOG_MAX_SIZE_MB,
+            thinkingProviders.isNotEmpty(),  // 主开关 = 是否勾选了任一平台
+            aiViaModule,
+            thinkingProviders
+        )
+    }
+
+    // 离开页面（onPause）时兜底保存：输入框尚未失焦的编辑内容不丢失
+    val activity = LocalContext.current as? MainActivity
+    DisposableEffect(Unit) {
+        activity?.pauseSaveHook = { autoSave() }
+        onDispose { activity?.pauseSaveHook = null }
+    }
+
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -282,7 +347,12 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(innerPadding)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                // 点击空白处清除输入焦点 → 触发失焦自动保存
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { focusManager.clearFocus() },
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // ── 框架服务状态 ────────────────────────────────────────────
@@ -319,7 +389,8 @@ fun SettingsScreen(
                         }
                     }
                     Text(
-                        if (serviceReady) "配置读写可用" else "未检测到 LSPosed 服务，保存不可用；请确认已在 LSPosed 中启用本模块",
+                        if (serviceReady) "配置读写可用 · 修改后自动保存"
+                        else "未检测到 LSPosed 服务，自动保存不可用；请确认已在 LSPosed 中启用本模块",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -336,21 +407,24 @@ fun SettingsScreen(
                     help = "AI 接口基地址，需兼容 OpenAI Chat Completions 格式。\n例如：https://api.deepseek.com",
                     value = baseUrl,
                     onValueChange = { baseUrl = it },
-                    placeholder = "如 https://api.deepseek.com"
+                    placeholder = "如 https://api.deepseek.com",
+                    onFocusLost = { autoSave() }
                 )
                 HelpField(
                     title = "API Key",
                     help = "AI 服务商提供的密钥，仅保存在本机配置中，用于调用接口时的身份鉴权。",
                     value = apiKey,
                     onValueChange = { apiKey = it },
-                    placeholder = "sk-..."
+                    placeholder = "sk-...",
+                    onFocusLost = { autoSave() }
                 )
                 HelpField(
                     title = "模型名",
                     help = "请求 AI 接口时使用的模型名称。\n例如：deepseek-flash、gpt-4o-mini。",
                     value = model,
                     onValueChange = { model = it },
-                    placeholder = "如 deepseek-flash"
+                    placeholder = "如 deepseek-flash",
+                    onFocusLost = { autoSave() }
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -412,6 +486,7 @@ fun SettingsScreen(
                                         thinkingProviders =
                                             if (checked) thinkingProviders + opt.id
                                             else thinkingProviders - opt.id
+                                        autoSave()
                                     }
                                 )
                             }
@@ -436,7 +511,10 @@ fun SettingsScreen(
                     Spacer(Modifier.weight(1f))
                     Switch(
                         checked = aiViaModule,
-                        onCheckedChange = { aiViaModule = it }
+                        onCheckedChange = {
+                            aiViaModule = it
+                            autoSave()
+                        }
                     )
                 }
             }
@@ -450,7 +528,8 @@ fun SettingsScreen(
                         value = targetCount,
                         onValueChange = { targetCount = it.filter { c -> c.isDigit() } },
                         placeholder = "10 ~ 200，默认 50",
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
+                        onFocusLost = { autoSave() }
                     )
                     HelpField(
                         title = "单批加载条数",
@@ -458,7 +537,8 @@ fun SettingsScreen(
                         value = pageCount,
                         onValueChange = { pageCount = it.filter { c -> c.isDigit() } },
                         placeholder = "5 ~ 30，默认 30",
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
+                        onFocusLost = { autoSave() }
                     )
                 }
                 HelpField(
@@ -468,9 +548,10 @@ fun SettingsScreen(
                     onValueChange = { extraPrompt = it },
                     placeholder = "可选，追加到系统提示词末尾",
                     singleLine = false,
-                    minLines = 5
+                    minLines = 5,
+                    onFocusLost = { autoSave() }
                 )
-                // 过滤规则入口：跳转二级页面管理排除型正则（独立保存，不走主页保存按钮）
+                // 过滤规则入口：跳转二级页面管理排除型正则（该页面自行即时保存，与主页自动保存独立）
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -512,7 +593,8 @@ fun SettingsScreen(
                         value = logRetentionDays,
                         onValueChange = { logRetentionDays = it.filter { c -> c.isDigit() } },
                         placeholder = "0 = 不限，默认 30",
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
+                        onFocusLost = { autoSave() }
                     )
                     HelpField(
                         title = "总大小上限 MB",
@@ -520,7 +602,8 @@ fun SettingsScreen(
                         value = logMaxSizeMb,
                         onValueChange = { logMaxSizeMb = it.filter { c -> c.isDigit() } },
                         placeholder = "0 = 不限，默认 100",
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
+                        onFocusLost = { autoSave() }
                     )
                 }
                 Text(
@@ -553,30 +636,6 @@ fun SettingsScreen(
                     )
                 }
             }
-
-            // ── 保存 ───────────────────────────────────────────────────
-            Button(
-                onClick = {
-                    onSave(
-                        baseUrl.ifBlank { ModuleConfig.DEFAULT_BASE_URL },
-                        apiKey,
-                        model.ifBlank { ModuleConfig.DEFAULT_MODEL },
-                        targetCount.toIntOrNull()?.coerceIn(10, 200)
-                            ?: ModuleConfig.DEFAULT_TARGET_COUNT,
-                        pageCount.toIntOrNull()?.coerceIn(5, 30)
-                            ?: ModuleConfig.DEFAULT_PAGE_COUNT,
-                        extraPrompt,
-                        logRetentionDays.toIntOrNull()?.coerceIn(0, 3650)
-                            ?: ModuleConfig.DEFAULT_LOG_RETENTION_DAYS,
-                        logMaxSizeMb.toIntOrNull()?.coerceIn(0, 4096)
-                            ?: ModuleConfig.DEFAULT_LOG_MAX_SIZE_MB,
-                        thinkingProviders.isNotEmpty(),  // 主开关 = 是否勾选了任一平台
-                        aiViaModule,
-                        thinkingProviders
-                    )
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("保存配置") }
 
             Spacer(Modifier.height(8.dp))
         }
@@ -647,6 +706,7 @@ private fun HelpField(
     placeholder: String = "",
     singleLine: Boolean = true,
     minLines: Int = 1,
+    onFocusLost: (() -> Unit)? = null,
 ) {
     Column(modifier = modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -655,10 +715,17 @@ private fun HelpField(
             HelpBadge(title = title, help = help)
         }
         Spacer(Modifier.height(6.dp))
+        var hadFocus by remember { mutableStateOf(false) }
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onFocusChanged {
+                    // 仅在"持有焦点 → 失去焦点"的跳变时触发，避开首次组合的初始回调
+                    if (hadFocus && !it.isFocused) onFocusLost?.invoke()
+                    hadFocus = it.isFocused
+                },
             placeholder = { Text(placeholder) },
             singleLine = singleLine,
             minLines = minLines,
