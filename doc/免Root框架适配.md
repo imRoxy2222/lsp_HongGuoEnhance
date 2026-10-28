@@ -75,3 +75,36 @@
 - **免 root 设备无法 root 直读日志数据库**：日志查看走 HTTP 通道（功能完整）。
 - **Instrumentation bootstrap hook 时机**：Vector 运行时的 Application 启动顺序
   与 LSPosed 不同，LogServer 拉起时机需真机验证。
+- **模拟器（MuMu 12）不可用**：见下节。
+
+## MuMu 模拟器崩溃分析（2026-10-28 实测）
+
+在 MuMu 12（x86_64，Android 12）上修补成功、安装成功，但 patched 红果启动即闪退。
+
+崩溃链（来自 lspatch-report 的 tombstone 与 framework log）：
+
+```
+ActivityThread.handleBindApplication
+→ MuMu 自带 java_patch 注入（ActivityThreadExt.injectJavaPatch
+  → com.java.helper.xposed.XposedInit.init_v4）      ← MuMu 魔改 ART 的注入框架
+→ LoadedApk.getClassLoader → createAppFactory
+→ LSPAppComponentFactoryStub.<clinit>                ← LSPatch 注入的桥接类
+→ System.load(管理器 APK 内的 liblspatch.so)
+→ nativeLoad 阶段 liblspatch.so 发起 JNI CallObjectMethodV 传入了 NULL jobject
+→ ART abort → SIGABRT
+```
+
+要点：
+
+1. **与模块无关**：宿主进程日志中无任何 HongGuoEnhance 加载记录，模块代码尚未
+   执行；模块 App 进程只是被系统冻结（正常行为）。
+2. **修补配置正常**：Manager 模式（useManager=true）、sigBypassLevel=2、
+   Shizuku 静默安装、签名替换全部成功。
+3. **根因推断**：liblspatch.so 与 MuMu 魔改 ART（自带 java_patch 热修补框架 +
+   houdini ARM 转译 + 修改过的 nativeLoad 路径）不兼容；MuMu 的注入框架提前
+   触发 appFactory 创建也可能是诱因。LSPatch 1.x 面向 Android 9+ 真机，
+   模拟器（尤其魔改 ROM 的 MuMu）不在其支持范围（连 MuMu 自带的
+   kernelsu_zygote 进程都在 tombstone 里崩）。
+
+结论：免 root 方案应在**真机**上验证；模拟器环境属框架层限制，模块侧无法规避。
+若需跟进，可携 tombstone 向 JingMatrix/LSPatch 提 issue。
