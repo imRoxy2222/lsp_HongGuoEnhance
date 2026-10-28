@@ -34,6 +34,10 @@ object XposedServiceHolder {
         XposedServiceHelper.registerListener(object : XposedServiceHelper.OnServiceListener {
             override fun onServiceBind(s: XposedService) {
                 service = s
+                // 采集框架信息（LSPosed / LSPatch 免 root 内嵌运行时），供设置页适配展示
+                runCatching {
+                    FrameworkEnv.update(s.frameworkName, s.frameworkVersion, s.frameworkProperties)
+                }
                 listeners.forEach { runCatching { it.onServiceChanged(s) } }
             }
 

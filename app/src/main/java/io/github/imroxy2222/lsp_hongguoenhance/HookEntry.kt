@@ -22,6 +22,13 @@ class HookEntry : XposedModule() {
     override fun onPackageLoaded(param: PackageLoadedParam) {
         super.onPackageLoaded(param)
         Logger.attach(this)
+        // 采集运行框架信息（LSPosed / LSPatch 免 root 内嵌运行时），供日志与适配判断
+        runCatching {
+            FrameworkEnv.update(
+                frameworkName, frameworkVersion.toString(), frameworkProperties
+            )
+            Logger.i("framework: ${FrameworkEnv.displayName()} (props=$frameworkProperties)")
+        }
         if (param.packageName != TARGET_APP) return
         Logger.i("onPackageLoaded: ${param.packageName}")
         try {

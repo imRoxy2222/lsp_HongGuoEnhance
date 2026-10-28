@@ -323,8 +323,16 @@ object Pipeline {
         val result = try {
             val previous = if (incremental) oldTags.map { it.text } else emptyList()
             if (ModuleConfig.aiViaModule()) {
-                // 进程桥模式：宿主组包，模块进程发 HTTP（代理只需放行模块应用）
-                AiBridge.summarize(toSummarize, cache.seriesName, previous)
+                // 进程桥模式：宿主组包，模块进程发 HTTP（代理只需放行模块应用）。
+                // 桥不可用（模块 App 未安装/被强停/免 root Embedded 模式无模块 App）
+                // 时自动回退宿主直连，不作为错误终止流程。
+                try {
+                    AiBridge.summarize(toSummarize, cache.seriesName, previous)
+                } catch (e: AiBridge.BridgeException) {
+                    Logger.w("进程桥不可用，回退宿主进程直连: ${e.message}")
+                    updateState(seriesId, State.AI_PENDING, "进程桥不可用，改为宿主进程直连...")
+                    AiClient.summarize(toSummarize, cache.seriesName, previous)
+                }
             } else {
                 AiClient.summarize(
                     toSummarize, cache.seriesName,
