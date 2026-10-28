@@ -53,21 +53,43 @@ HTTP 请求默认**从模块自身进程发出**而非红果进程（设置页"A
 - **日志**：`LogStore.appendTags` 的请求/响应记录与直连模式完全一致
   （请求体由宿主组包后原样回传，响应由 Provider 带回）。
 
-## 关闭思考模式（AiClient.putDisableThinking）
+## 关闭思考模式（AiClient.THINKING_OPTIONS 平台适配）
 
 词条总结只需输出固定格式的 JSON，不需要模型深度推理，开启思考只会白白增加
-延迟与 token 消耗，故请求体默认关闭思考模式（设置页"AI 接口配置"最底部的
-**取消思考** 复选框，默认开启；关闭后请求体不携带下列字段）。
+延迟与 token 消耗，故请求体默认关闭思考模式（设置页"AI 接口配置"的
+**取消思考** 复选框，默认开启；关闭后请求体不携带任何相关字段）。
 
-OpenAI 兼容协议没有统一的"关闭思考"字段，各家实现不一致，请求体同时携带
-多个常见字段（兼容服务端对不认识的字段按忽略处理）：
+OpenAI 兼容协议没有统一的"关闭思考"字段，各家实现不一致；且部分严格服务端
+（如 **Groq**）遇到不认识的参数会直接 4xx 报错（如
+`property 'chat_template_kwargs' is unsupported`），因此**不做四形状全带**，
+而是抽象为平台适配项列表 `AiClient.THINKING_OPTIONS`。设置页"取消思考"行
+点击右侧箭头展开，**按平台逐项勾选**要携带的字段（收起后已勾选项仍生效；
+全部不勾选即完全关闭；未勾选不携带；默认全选，与旧版行为一致）：
 
-| 字段 | 适用服务端 |
-|---|---|
-| `enable_thinking: false` | 通义/DashScope、SiliconFlow、MiniMax 等 |
-| `thinking: {"type": "disabled"}` | **DeepSeek 官方**（[思考模式文档](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode)）、智谱 GLM 等 |
-| `reasoning: {"enabled": false, "effort": "none"}` | **DeepSeek 官方**（`effort: "none"` 即关闭思考）与 OpenRouter（`enabled: false`）两种形状并存 |
-| `chat_template_kwargs: {"enable_thinking": false}` | vLLM / SGLang 自部署 |
+| 选项 id | 字段 | 适用服务端 |
+|---|---|---|
+| `enable_thinking` | `enable_thinking: false` | 通义/DashScope、SiliconFlow、MiniMax 等 |
+| `thinking` | `thinking: {"type": "disabled"}` | **DeepSeek 官方**（[思考模式文档](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode)）、智谱 GLM 等 |
+| `reasoning` | `reasoning: {"enabled": false, "effort": "none"}` | **DeepSeek 官方**（`effort: "none"` 即关闭思考）与 OpenRouter（`enabled: false`）两种形状并存 |
+| `chat_template_kwargs` | `chat_template_kwargs: {"enable_thinking": false}` | vLLM / SGLang 自部署 |
+| `reasoning_effort` | `reasoning_effort: "low"` | **OpenAI 官方**（o 系列推理模型 / GPT-5），**默认不勾选** |
+
+关于 OpenAI 官方的说明：
+
+- **o 系列推理模型（o1/o3/o4 等）无法完全关闭思考**，只能用 `reasoning_effort`
+  调低（最低 `low`）；GPT-5 额外支持 `"minimal"`（比 low 更低），需要时可在
+  代码中把该选项的值改为 minimal；
+- **gpt-4o / gpt-4.1 / chat 系列是非推理模型**，本身没有思考，任何项都不用勾；
+- OpenAI 官方接口对未知参数同样会 400 报错（`Unrecognized request argument`），
+  使用官方接口时**只勾"OpenAI 官方"一项**，其余平台项全部取消勾选。
+
+**扩展**：新增热门平台只需在 `THINKING_OPTIONS` 列表加一个 `ThinkingOption`
+（id / 展示名 / 字段说明 / 字段应用器），设置页 UI 与配置存储自动跟随，无需改动。
+
+**存储**：`thinking_providers` key 存逗号分隔的选项 id 字符串（remote
+preferences 对 StringSet 支持不可靠，故用字符串）；未配置时按各选项
+`defaultOn` 取默认（`reasoning_effort` 默认不勾选，其余默认勾选，
+与旧版行为一致）。
 
 DeepSeek 官方文档要点（2026-10 核对）：
 

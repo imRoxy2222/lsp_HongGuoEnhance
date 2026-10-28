@@ -6,6 +6,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +24,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -30,6 +33,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -39,6 +44,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,7 +54,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.unit.dp
+import io.github.imroxy2222.lsp_hongguoenhance.hook.AiClient
 import io.github.imroxy2222.lsp_hongguoenhance.hook.ModuleConfig
 import io.github.imroxy2222.lsp_hongguoenhance.ui.theme.HongGuoEnhanceTheme
 import io.github.libxposed.service.XposedService
@@ -125,10 +133,12 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     onSave = { baseUrl, apiKey, model, targetCount, pageCount, extraPrompt,
-                               logRetentionDays, logMaxSizeMb, disableThinking, aiViaModule ->
+                               logRetentionDays, logMaxSizeMb, disableThinking, aiViaModule,
+                               thinkingProviders ->
                         saveConfig(
                             baseUrl, apiKey, model, targetCount, pageCount, extraPrompt,
-                            logRetentionDays, logMaxSizeMb, disableThinking, aiViaModule
+                            logRetentionDays, logMaxSizeMb, disableThinking, aiViaModule,
+                            thinkingProviders
                         )
                     },
                     onOpenLogs = {
@@ -175,6 +185,9 @@ class MainActivity : ComponentActivity() {
             ModuleConfig.KEY_DISABLE_THINKING to p.getBoolean(
                 ModuleConfig.KEY_DISABLE_THINKING, ModuleConfig.DEFAULT_DISABLE_THINKING
             ),
+            ModuleConfig.KEY_THINKING_PROVIDERS to (p.getString(
+                ModuleConfig.KEY_THINKING_PROVIDERS, null
+            ) ?: ""),
             ModuleConfig.KEY_AI_VIA_MODULE to p.getBoolean(
                 ModuleConfig.KEY_AI_VIA_MODULE, ModuleConfig.DEFAULT_AI_VIA_MODULE
             )
@@ -186,6 +199,7 @@ class MainActivity : ComponentActivity() {
         targetCount: Int, pageCount: Int, extraPrompt: String,
         logRetentionDays: Int, logMaxSizeMb: Int,
         disableThinking: Boolean, aiViaModule: Boolean,
+        thinkingProviders: Set<String>,
     ) {
         val s = service
         if (s == null) {
@@ -204,6 +218,7 @@ class MainActivity : ComponentActivity() {
             .putInt(ModuleConfig.KEY_LOG_MAX_SIZE_MB, logMaxSizeMb)
             .putBoolean(ModuleConfig.KEY_DISABLE_THINKING, disableThinking)
             .putBoolean(ModuleConfig.KEY_AI_VIA_MODULE, aiViaModule)
+            .putString(ModuleConfig.KEY_THINKING_PROVIDERS, thinkingProviders.joinToString(","))
             .apply()
         Toast.makeText(this, "已保存，重启红果短剧后生效", Toast.LENGTH_SHORT).show()
     }
@@ -216,7 +231,7 @@ fun SettingsScreen(
     launcherHidden: Boolean,
     initial: Map<String, Any>?,
     onScopeRequest: () -> Unit,
-    onSave: (String, String, String, Int, Int, String, Int, Int, Boolean, Boolean) -> Unit,
+    onSave: (String, String, String, Int, Int, String, Int, Int, Boolean, Boolean, Set<String>) -> Unit,
     onOpenLogs: () -> Unit,
     onHideIconChange: (Boolean) -> Unit,
 ) {
@@ -241,12 +256,21 @@ fun SettingsScreen(
         )
     }
     var extraPrompt by remember(initial) { mutableStateOf(str(ModuleConfig.KEY_EXTRA_PROMPT, "")) }
-    var disableThinking by remember(initial) {
+    var thinkingProviders by remember(initial) {
+        // 旧配置兼容：以前把"取消思考"显式关闭过（disable_thinking=false）视为全不勾
+        val masterOn = (initial?.get(ModuleConfig.KEY_DISABLE_THINKING) as? Boolean)
+            ?: ModuleConfig.DEFAULT_DISABLE_THINKING
+        val saved = (initial?.get(ModuleConfig.KEY_THINKING_PROVIDERS) as? String)
+            ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet()
         mutableStateOf(
-            (initial?.get(ModuleConfig.KEY_DISABLE_THINKING) as? Boolean)
-                ?: ModuleConfig.DEFAULT_DISABLE_THINKING
+            when {
+                saved != null -> saved
+                masterOn -> AiClient.THINKING_OPTIONS.filter { it.defaultOn }.map { it.id }.toSet()
+                else -> emptySet()
+            }
         )
     }
+    var thinkingExpanded by rememberSaveable { mutableStateOf(false) }
     var aiViaModule by remember(initial) {
         mutableStateOf(
             (initial?.get(ModuleConfig.KEY_AI_VIA_MODULE) as? Boolean)
@@ -360,17 +384,63 @@ fun SettingsScreen(
                     Spacer(Modifier.width(6.dp))
                     HelpBadge(
                         title = "取消思考",
-                        help = "开启后 AI 请求会同时携带各家的\"关闭思考\"字段，" +
-                            "不认识的字段会被服务端自动忽略，不影响请求。\n\n" +
-                            "可生效平台：DeepSeek、OpenRouter、通义/DashScope、智谱 GLM、" +
-                            "SiliconFlow、MiniMax、vLLM / SGLang 自部署等 OpenAI 兼容服务。\n" +
-                            "OpenAI 官方接口不识别这些字段（自动忽略，保持默认行为）。"
+                        help = "点击右侧箭头展开，按你使用的 AI 服务勾选要携带的\"关闭思考\"字段；" +
+                            "收起后已勾选的项仍会在请求时携带，全部不勾选即完全关闭。\n\n" +
+                            "注意：部分服务端（如 Groq、OpenAI 官方）遇到不认识的参数会直接报错" +
+                            "（invalid_request_error），只勾选你的平台即可；\n" +
+                            "· Groq 无对应字段，全部不勾选；\n" +
+                            "· OpenAI 官方只勾\"OpenAI 官方\"一项（o 系列只能调低思考，" +
+                            "GPT-5 支持更低；gpt-4o 等非推理模型无需勾选任何项）。"
                     )
                     Spacer(Modifier.weight(1f))
-                    Checkbox(
-                        checked = disableThinking,
-                        onCheckedChange = { disableThinking = it }
+                    Text(
+                        if (thinkingProviders.isEmpty()) "已关闭"
+                        else "已选 ${thinkingProviders.size} 项",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    // 展开箭头：点击展开/收起平台勾选列表
+                    val chevronRotation by animateFloatAsState(
+                        targetValue = if (thinkingExpanded) 180f else 0f,
+                        label = "thinkingChevron"
+                    )
+                    IconButton(onClick = { thinkingExpanded = !thinkingExpanded }) {
+                        Icon(
+                            Icons.Filled.KeyboardArrowDown,
+                            contentDescription = if (thinkingExpanded) "收起" else "展开",
+                            modifier = Modifier.rotate(chevronRotation)
+                        )
+                    }
+                }
+                AnimatedVisibility(visible = thinkingExpanded) {
+                    // 平台适配项：逐项勾选要携带的"关闭思考"字段（AiClient.THINKING_OPTIONS）
+                    Column {
+                        for (opt in AiClient.THINKING_OPTIONS) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 24.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(opt.label, style = MaterialTheme.typography.bodySmall)
+                                    Text(
+                                        opt.fields,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Checkbox(
+                                    checked = opt.id in thinkingProviders,
+                                    onCheckedChange = { checked ->
+                                        thinkingProviders =
+                                            if (checked) thinkingProviders + opt.id
+                                            else thinkingProviders - opt.id
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -496,8 +566,9 @@ fun SettingsScreen(
                             ?: ModuleConfig.DEFAULT_LOG_RETENTION_DAYS,
                         logMaxSizeMb.toIntOrNull()?.coerceIn(0, 4096)
                             ?: ModuleConfig.DEFAULT_LOG_MAX_SIZE_MB,
-                        disableThinking,
-                        aiViaModule
+                        thinkingProviders.isNotEmpty(),  // 主开关 = 是否勾选了任一平台
+                        aiViaModule,
+                        thinkingProviders
                     )
                 },
                 modifier = Modifier.fillMaxWidth()

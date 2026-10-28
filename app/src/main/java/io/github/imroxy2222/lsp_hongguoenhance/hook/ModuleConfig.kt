@@ -26,6 +26,7 @@ object ModuleConfig {
     const val KEY_LOG_DB_PATH = "log_db_path"     // 宿主端真实日志数据库路径上报（root 直读用）
     const val KEY_DISABLE_THINKING = "disable_thinking" // AI 请求关闭思考模式（默认开启）
     const val KEY_AI_VIA_MODULE = "ai_via_module"       // AI 请求经进程桥走模块进程（默认开启）
+    const val KEY_THINKING_PROVIDERS = "thinking_providers" // 勾选携带"关闭思考"字段的平台 id，逗号分隔
 
     const val DEFAULT_BASE_URL = "https://api.deepseek.com"
     const val DEFAULT_MODEL = "deepseek-flash"
@@ -71,6 +72,27 @@ object ModuleConfig {
     /** AI 请求是否经进程桥由模块进程发出（未配置时默认开启；关掉则宿主进程直连）。 */
     fun aiViaModule(): Boolean =
         p().getBoolean(KEY_AI_VIA_MODULE, DEFAULT_AI_VIA_MODULE)
+
+    /**
+     * 勾选了携带"关闭思考"字段的平台 id 集合（未配置时按各选项的
+     * defaultOn 取默认，与旧版"四形状全带"的行为一致）。
+     */
+    fun thinkingProviders(): Set<String> {
+        val saved = try {
+            p().getString(KEY_THINKING_PROVIDERS, null)
+        } catch (t: Throwable) {
+            null
+        }?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet()
+        return saved ?: AiClient.THINKING_OPTIONS.filter { it.defaultOn }.map { it.id }.toSet()
+    }
+
+    fun setThinkingProviders(ids: Set<String>) {
+        try {
+            prefs?.edit()?.putString(KEY_THINKING_PROVIDERS, ids.joinToString(","))?.apply()
+        } catch (t: Throwable) {
+            // 写配置失败不影响主流程
+        }
+    }
 
     fun logRetentionDays(): Int =
         p().getInt(KEY_LOG_RETENTION_DAYS, DEFAULT_LOG_RETENTION_DAYS).coerceIn(0, 3650)

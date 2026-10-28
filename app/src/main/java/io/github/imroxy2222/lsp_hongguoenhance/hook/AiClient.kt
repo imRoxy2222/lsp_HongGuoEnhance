@@ -60,7 +60,11 @@ object AiClient {
         val body = JSONObject().apply {
             put("model", ModuleConfig.model())
             put("temperature", 0.1) // 调低会让结果趋于稳定
-            if (ModuleConfig.disableThinking()) putDisableThinking()
+            if (ModuleConfig.disableThinking()) {
+                // 仅携带用户勾选平台的"关闭思考"字段（严格服务端如 Groq 遇未知参数会 4xx）
+                val enabled = ModuleConfig.thinkingProviders()
+                for (opt in THINKING_OPTIONS) if (opt.id in enabled) opt.apply(this)
+            }
             put("messages", JSONArray().put(JSONObject().put("role", "system").put("content", systemPrompt)))
         }
         val msg = JSONObject().put("role", "user").put("content", userPrompt)
@@ -118,22 +122,65 @@ object AiClient {
     }
 
     /**
-     * 关闭思考模式。OpenAI 兼容协议本身没有统一的"关闭思考"字段，
-     * 各家实现不一致，故同时携带多个常见字段，兼容服务端会忽略不认识的字段：
-     * - enable_thinking=false                            通义/DashScope、SiliconFlow、MiniMax 等
-     * - thinking={"type":"disabled"}                     DeepSeek 官方（api-docs/guides/thinking_mode）、智谱 GLM 等
-     * - reasoning={"enabled":false,"effort":"none"}       DeepSeek 官方（effort=none 即关闭）与
-     *                                                    OpenRouter（enabled=false）两种形状并存
-     * - chat_template_kwargs={"enable_thinking":false}   vLLM / SGLang 自部署
+     * "关闭思考"平台适配项（抽象化，新增平台只需在此列表加一项）。
+     *
+     * OpenAI 兼容协议没有统一的"关闭思考"字段，各家实现不一致；
+     * 且部分严格服务端（如 Groq）遇到不认识的参数会直接 4xx 报错
+     * （如 `property 'chat_template_kwargs' is unsupported`），
+     * 故按平台拆分成独立选项，由用户在设置页勾选要携带哪些。
+     *
+     * @param id        配置存储用的标识（同时是设置页勾选集合的元素）
+     * @param label     设置页展示名
+     * @param fields    该项携带的字段说明（帮助文案用）
+     * @param defaultOn 未配置过勾选集合时的默认状态；新增选项应设为 false，
+     *                  避免升级后给使用其他平台的既有用户意外带上新字段
+     * @param apply     把该平台的"关闭思考"字段写进请求体
      */
-    private fun JSONObject.putDisableThinking() {
-        put("enable_thinking", false)
-        put("thinking", JSONObject().put("type", "disabled"))
-        put("reasoning", JSONObject()
-            .put("enabled", false)
-            .put("effort", "none"))
-        put("chat_template_kwargs", JSONObject().put("enable_thinking", false))
-    }
+    data class ThinkingOption(
+        val id: String,
+        val label: String,
+        val fields: String,
+        val defaultOn: Boolean = true,
+        val apply: (JSONObject) -> Unit,
+    )
+
+    val THINKING_OPTIONS: List<ThinkingOption> = listOf(
+        ThinkingOption(
+            id = "enable_thinking",
+            label = "通义/DashScope、SiliconFlow、MiniMax",
+            fields = "enable_thinking: false",
+            apply = { it.put("enable_thinking", false) }
+        ),
+        ThinkingOption(
+            id = "thinking",
+            label = "DeepSeek官方(推荐)、智谱GLM",
+            fields = "thinking: {\"type\": \"disabled\"}",
+            apply = { it.put("thinking", JSONObject().put("type", "disabled")) }
+        ),
+        ThinkingOption(
+            id = "reasoning",
+            label = "DeepSeek官(effort)、OpenRouter",
+            fields = "reasoning: {\"enabled\": false, \"effort\": \"none\"}",
+            apply = { it.put("reasoning", JSONObject().put("enabled", false).put("effort", "none")) }
+        ),
+        ThinkingOption(
+            id = "chat_template_kwargs",
+            label = "vLLM、SGLang自部署",
+            fields = "chat_template_kwargs: {\"enable_thinking\": false}",
+            apply = { it.put("chat_template_kwargs", JSONObject().put("enable_thinking", false)) }
+        ),
+        // OpenAI 官方：o 系列推理模型无法完全关闭思考，只能调低 effort；
+        // gpt-5 额外支持 "minimal"（比 low 更低）。gpt-4o/4.1 等非推理模型
+        // 本身无思考，无需勾选任何项。注意 OpenAI 官方对未知参数同样会报
+        // 400（Unrecognized request argument），使用官方接口时其他项不要勾选。
+        ThinkingOption(
+            id = "reasoning_effort",
+            label = "OpenAI 官方（o 系列推理模型 / GPT-5）",
+            fields = "reasoning_effort: \"low\"（GPT-5 可更低，o 系列最低 low）",
+            defaultOn = false,
+            apply = { it.put("reasoning_effort", "low") }
+        ),
+    )
 
     private fun buildSystemPrompt(previousTags: List<String>): String {
         val extra = ModuleConfig.extraPrompt()
@@ -141,10 +188,10 @@ object AiClient {
         // 仅是优先而非强制，避免新特点被旧词条集合限死
         val prefer = if (previousTags.isEmpty()) "" else
             "此前已总结出以下词条：${previousTags.joinToString("、")}。\n" +
-            "本次总结请优先沿用上述词条：若新评论体现的特点与已有词条相同，" +
-            "必须使用完全相同的词条名，以便累计合并计数；" +
-            "但这只是优先而非强制——若新评论体现了已有词条未覆盖的新特点，" +
-            "可以总结新词条。\n"
+                    "本次总结请优先沿用上述词条：若新评论体现的特点与已有词条相同，" +
+                    "必须使用完全相同的词条名，以便累计合并计数；" +
+                    "但这只是优先而非强制——若新评论体现了已有词条未覆盖的新特点，" +
+                    "可以总结新词条。\n"
         return "你是一名短剧评论分析助手。用户会给你一批某部短剧的观众评论，" +
                 "请你从中提炼出描述剧情与人设特点的评价词条，" +
                 "例如：杀伐果断、圣母、无脑爽文、逻辑漏洞、演技在线、节奏拖沓 等。" +
