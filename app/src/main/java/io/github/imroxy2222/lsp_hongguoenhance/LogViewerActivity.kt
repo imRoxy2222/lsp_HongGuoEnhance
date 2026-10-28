@@ -7,6 +7,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
@@ -641,6 +642,11 @@ class LogViewerActivity : ComponentActivity() {
     @Composable
     private fun DetailScreen(entry: SeriesEntry, log: SeriesLog, onBack: () -> Unit) {
         var showAiLog by remember { mutableStateOf(false) }
+        // 系统返回手势/返回键逐级返回：AI 记录页(三级) → 单剧评论流(二级) → 剧列表(一级)，
+        // 而不是像默认行为那样直接 finish 整个日志 Activity 回到设置主页
+        BackHandler {
+            if (showAiLog) showAiLog = false else onBack()
+        }
         if (showAiLog) {
             AiLogScreen(entry, log) { showAiLog = false }
             return
