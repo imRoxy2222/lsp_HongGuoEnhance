@@ -39,9 +39,8 @@ object ModuleConfig {
      * 2/3. 历史内置排除规则（剧名/续季宣传语、催更/版本讨论）。
      */
     val DEFAULT_EXCLUDE_RULES = listOf(
-        FilterRule("[\\s\\S]{15,}", "字数下限：评论少于 15 字即丢弃"),
+        FilterRule("[\\s\\S]{,15}", "字数下限：评论少于 15 字即丢弃"),
         FilterRule("[快出].*第.+季", "剧名/续季宣传语,容易误伤,酌情设置"),
-        FilterRule("更新", "催更、版本更新讨论"),
     )
 
     /**
