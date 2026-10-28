@@ -109,6 +109,7 @@ object SharePanelHook {
                         return@intercept null // 替换原分享面板，不调用 proceed()
                     }
                     // 拿不到 seriesId 时放行原分享面板，避免破坏正常分享
+                    }
                 }
                 chain.proceed()
             }

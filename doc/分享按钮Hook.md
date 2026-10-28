@@ -43,6 +43,11 @@ public void showShortSeriesSharePanel(
 校验条件：`activity instanceof ShortSeriesActivity`，保证只影响短剧播放页的分享，
 其余页面的分享行为不受影响。若无法取到 seriesId，则放行原分享面板（降级保护）。
 
+**主页（信息流）特殊处理**：`com.dragon.read.pages.main.MainFragmentActivity`
+的分享按钮与播放页同构（同 id `hq0`，UI 改造同样生效），但 AI 总结需进入剧集
+才能确定目标剧（`SeriesIdHolder` 可能残留其他剧的 id）。该页面点击时**不弹词条页、
+不放行原分享面板**，仅 Toast 提示"需要进入剧集内才能触发AI总结"。
+
 ## 实现（SharePanelHook.kt）
 
 ```kotlin
