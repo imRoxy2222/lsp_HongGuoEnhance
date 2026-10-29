@@ -122,7 +122,7 @@ object Pipeline {
         }
     }
 
-    /** 分享按钮点击（已替换原分享面板）：打开词条页，无缓存时自动开始采集。 */
+    /** 分享按钮点击（已替换原分享面板）。 */
     fun onShareClicked(activity: Activity, seriesId: String) {
         // 日志存储/服务兜底初始化（幂等；放到工作线程避免主线程 DB/文件 IO）
         val appContext = activity.applicationContext
@@ -133,53 +133,75 @@ object Pipeline {
             runCatching { LogServer.ensureStarted(appContext) }
             LogStore.appendMeta(seriesId, cache.seriesName)
         }
+        when {
+            // 已有词条 / 正在采集总结中 / 上次失败待重试：直接弹窗（进行中则挂到现有进度上）
+            cache.tags != null || cache.state != State.IDLE -> presentDialog(activity, seriesId)
+            // 首次总结：不弹窗等待——Toast 提示后后台执行，成功/失败后自动弹出词条页
+            else -> {
+                toast(activity, "开始总结")
+                pendingShow = java.lang.ref.WeakReference(activity)
+                pendingShowSeriesId = seriesId
+                executor.execute {
+                    // 先查本地日志库的历史总结（词条持久缓存），app 被杀后重启也能复用，
+                    // 避免重复调用 AI；无历史才发起采集
+                    val saved = try {
+                        LogStore.loadLatestSummary(seriesId)
+                    } catch (t: Throwable) {
+                        Logger.w("load saved summary failed: ${t.message}")
+                        null
+                    }
+                    if (saved != null) {
+                        // 一次性恢复会话：历史词条 + 已用评论 + 采集统计（x/z）+ 分页游标
+                        val session = try {
+                            LogStore.loadSessionState(seriesId)
+                        } catch (t: Throwable) {
+                            Logger.w("load session state failed: ${t.message}")
+                            null
+                        }
+                        if (session != null) {
+                            if (cache.comments.isEmpty()) {
+                                cache.comments.addAll(session.usedComments)
+                            }
+                            cache.rawSeen.addAll(session.rawTexts)
+                            if (cache.rawCount == 0) cache.rawCount = session.rawCount
+                            if (cache.scoreSum == 0.0) cache.scoreSum = session.scoreSum
+                            if (cache.cursor == null) cache.cursor = session.cursor
+                        }
+                        cache.tags = saved.tags
+                        cache.tagsFromCount = saved.baseCount
+                        cache.dims = saved.dims
+                        LogStore.appendMeta(seriesId, cache.seriesName)
+                        Logger.i("summary restored from cache: $seriesId, tags=${saved.tags.size}")
+                        // updateState 的终态分支会自动弹出词条页
+                        updateState(seriesId, State.DONE, statsLine(seriesId))
+                    } else {
+                        startInitialCollect(seriesId)
+                    }
+                }
+            }
+        }
+    }
+
+    /** 首次总结的"延迟弹窗"宿主 Activity：到达终态（成功/失败）时自动弹出词条页。 */
+    @Volatile
+    private var pendingShow: java.lang.ref.WeakReference<Activity>? = null
+
+    @Volatile
+    private var pendingShowSeriesId: String? = null
+
+    /** 在宿主 Activity 上弹出词条页（TagDialog.show 内部自动同步当前缓存状态）。 */
+    private fun presentDialog(activity: Activity, seriesId: String) {
+        if (activity.isFinishing || activity.isDestroyed) return
         val dialog = TagDialog(activity, seriesId)
         activeDialog = java.lang.ref.WeakReference(dialog)
         dialog.show()
-        if (cache.tags != null) {
-            // 内存缓存命中，直接展示
-            main.post { dialog.onTags(cache.tags!!) }
-        } else if (cache.state == State.IDLE) {
-            // 内存未命中：先查本地日志库的历史总结（词条持久缓存），
-            // app 被杀后重启也能复用，避免重复调用 AI；无历史才发起采集
-            executor.execute {
-                val saved = try {
-                    LogStore.loadLatestSummary(seriesId)
-                } catch (t: Throwable) {
-                    Logger.w("load saved summary failed: ${t.message}")
-                    null
-                }
-                if (saved != null) {
-                    // 一次性恢复会话：历史词条 + 已用评论 + 采集统计（x/z）+ 分页游标
-                    val session = try {
-                        LogStore.loadSessionState(seriesId)
-                    } catch (t: Throwable) {
-                        Logger.w("load session state failed: ${t.message}")
-                        null
-                    }
-                    if (session != null) {
-                        if (cache.comments.isEmpty()) {
-                            cache.comments.addAll(session.usedComments)
-                        }
-                        cache.rawSeen.addAll(session.rawTexts)
-                        if (cache.rawCount == 0) cache.rawCount = session.rawCount
-                        if (cache.scoreSum == 0.0) cache.scoreSum = session.scoreSum
-                        if (cache.cursor == null) cache.cursor = session.cursor
-                    }
-                    cache.tags = saved.tags
-                    cache.tagsFromCount = saved.baseCount
-                    cache.dims = saved.dims
-                    cache.state = State.DONE
-                    cache.stateInfo = statsLine(seriesId)
-                    LogStore.appendMeta(seriesId, cache.seriesName)
-                    Logger.i("summary restored from cache: $seriesId, tags=${saved.tags.size}")
-                    main.post {
-                        dialog.onTags(saved.tags)
-                        dialog.onState(State.DONE, cache.stateInfo, cache.comments.size, cache.hasMore)
-                    }
-                } else {
-                    startInitialCollect(seriesId)
-                }
+    }
+
+    /** 宿主进程 Toast（主线程派发 + 容错）。 */
+    private fun toast(activity: Activity, text: String) {
+        main.post {
+            runCatching {
+                android.widget.Toast.makeText(activity, text, android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -266,14 +288,20 @@ object Pipeline {
      *
      * - AI 总结失败：把当前 cache.comments 全量重发给 AI（全量模式，非增量）；
      * - 首次采集就失败（一条评论都没有）：退回重新走采集流程。
+     *
+     * 注意：重试按钮在**主线程**触发，而 runAi 是同步网络请求——
+     * 必须整体跳到工作线程执行，否则抛 NetworkOnMainThreadException
+     * （且重试路径必然有已采集评论，一踩就稳定复现）。
      */
     fun retry(seriesId: String) {
-        val cache = caches.getOrPut(seriesId) { SeriesCache(seriesId, SeriesIdHolder.nameOf(seriesId)) }
-        if (cache.state == State.COLLECTING || cache.state == State.AI_PENDING) return
-        if (cache.comments.isEmpty()) {
-            startInitialCollect(seriesId)
-        } else {
-            runAi(seriesId)
+        executor.execute {
+            val cache = caches.getOrPut(seriesId) { SeriesCache(seriesId, SeriesIdHolder.nameOf(seriesId)) }
+            if (cache.state == State.COLLECTING || cache.state == State.AI_PENDING) return@execute
+            if (cache.comments.isEmpty()) {
+                startInitialCollect(seriesId)
+            } else {
+                runAi(seriesId)
+            }
         }
     }
 
@@ -323,6 +351,12 @@ object Pipeline {
      * 返回后与旧词条按文本合并 count、重新降序，得到与全量总结等价的累计结果。
      */
     private fun runAi(seriesId: String, newBatch: List<String>? = null) {
+        // 防御护栏：runAi 内部是同步 HTTP 请求，绝不允许在主线程执行；
+        // 误用时自动改派到工作线程（根治 NetworkOnMainThreadException 这一类问题）
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            executor.execute { runAi(seriesId, newBatch) }
+            return
+        }
         val cache = caches[seriesId] ?: return
         val oldTags = cache.tags
         val incremental = newBatch != null && !oldTags.isNullOrEmpty() && newBatch.isNotEmpty()
@@ -425,6 +459,14 @@ object Pipeline {
         main.post {
             activeDialog?.get()?.takeIf { it.seriesId == seriesId }
                 ?.onState(state, info, cache.comments.size, cache.hasMore)
+            // 首次总结不弹窗：终态（成功 DONE / 失败 ERROR）到达时自动弹出词条页；
+            // 消费一次性 pending，Activity 已销毁则静默放弃（结果已落库可随时再点开）
+            if ((state == State.DONE || state == State.ERROR) && pendingShowSeriesId == seriesId) {
+                val act = pendingShow?.get()
+                pendingShow = null
+                pendingShowSeriesId = null
+                if (act != null) presentDialog(act, seriesId)
+            }
         }
     }
 
