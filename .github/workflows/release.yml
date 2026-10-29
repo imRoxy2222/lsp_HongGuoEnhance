@@ -1,4 +1,5 @@
 # 发布流程: 打 v* tag -> 校验 tag 递增 (vN 必须存在 vN-1) -> 生成 commit message 更新日志 -> 打包 APK -> 本仓库创建 Release (正文=changelog) -> 同步发布到 LSPosed 模块仓库 (tag 固定为 VersionCode-VersionName, 正文=changelog)
+# Release 正文最顶部固定一行适配版本下载指引 (两个仓库的 Release 均生效), 见 doc/Release适配版本下载指引.md
 name: Release APK
 
 on:
@@ -37,11 +38,13 @@ jobs:
 
       # 生成基于 commit message 的更新日志:
       # vN 相对 v(N-1) 的全部提交 (v1 无前置 tag 时为全量历史),
-      # 本仓库 Release 与 LSPosed 仓库 Release 正文共用这一份 changelog
+      # 本仓库 Release 与 LSPosed 仓库 Release 正文共用这一份 changelog。
+      # 正文第一行固定为适配版本下载指引, 置顶显示 (在 changelog 之前)
       - name: Generate changelog
         id: changelog
         env:
           TAG: ${{ github.ref_name }}
+          HOST_LINE: 适配红果版本7.2.5.32, [点击下载](https://m.wandoujia.com/apps/8396801/history_v72532)
         run: |
           N="${TAG#v}"
           if [ "$N" -gt 1 ] && git rev-parse -q --verify "refs/tags/v$((N-1))" >/dev/null; then
@@ -55,12 +58,15 @@ jobs:
           fi
           {
             echo "notes<<CHANGELOG_EOF"
+            echo "$HOST_LINE"
+            echo ""
             echo "## 更新日志"
             echo ""
             echo "$LOG"
             echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"
           echo "changelog 预览:"
+          echo "$HOST_LINE"
           echo "$LOG"
 
       - name: Setup JDK
@@ -120,7 +126,7 @@ jobs:
           fi
           echo "versionCode=$VCODE 与 tag 一致"
 
-      # Release 正文 = commit message 更新日志 (不再使用 --generate-notes 的对比链接)
+      # Release 正文 = 置顶适配版本下载指引 + commit message 更新日志
       - name: Create Release (this repo)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -133,7 +139,7 @@ jobs:
       # 同步发布到 LSPosed 模块仓库 (只放 release/readme, 不放代码)
       # 前提: 仓库变量 LSPOSED_REPO = LSPosed 模块仓库的 owner/name; secret LSPOSED_TOKEN = 对其有写权限的 PAT
       # 注意: LSPosed 仓库的 Release tag 必须为 VersionCode-VersionName (如 15-15),
-      #       直接用 v15 会被 bot 判定无效; Release 标题 = 版本名, 正文 = commit message 更新日志
+      #       直接用 v15 会被 bot 判定无效; Release 标题 = 版本名, 正文与主仓库一致 (置顶指引 + changelog)
       - name: Publish Release to LSPosed module repo
         if: ${{ vars.LSPOSED_REPO != '' }}
         env:

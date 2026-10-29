@@ -13,8 +13,8 @@ push 代码到 master ──→ (不触发任何构建)
                  (v1 无前置 tag 时为全量历史)
               3. 打包 APK (versionCode/versionName = 最近 v* tag 数字, 即 N)
               4. 校验 APK 内 versionCode == tag 数字 (硬校验)
-              5. 在本仓库创建 Release, 上传 HongGuoEnhance-v<N>.apk, 正文 = 更新日志
-              6. 在 LSPosed 为你创建的模块仓库里创建同名 Release 并上传同一 APK, 正文 = 更新日志
+              5. 在本仓库创建 Release, 上传 HongGuoEnhance-v<N>.apk, 正文 = 置顶适配版本下载指引 + 更新日志
+              6. 在 LSPosed 为你创建的模块仓库里创建同名 Release 并上传同一 APK, 正文与主仓库一致
 ```
 
 LSPosed 仓库不放代码，只放 Release 文件、README、summary 等少量信息；所有版本检测都基于 APK 内 `META-INF/xposed/module.prop` 的 `versionCode`。
@@ -152,6 +152,6 @@ $env:RELEASE_KEY_PASSWORD = "你的key密码"
 
 ## 涉及文件
 
-- `.github/workflows/release.yml` — 工作流本体（含 tag 递增硬校验）
+- `.github/workflows/release.yml` — 工作流本体（含 tag 递增硬校验、Release 置顶适配版本下载指引，见 [Release适配版本下载指引.md](Release适配版本下载指引.md)）
 - `app/build.gradle.kts` — 版本号来源（最近 `v*` tag 数字）+ `generateModuleProp` 任务（生成 module.prop）+ CI 签名支持
 - `doc/版本号自动升级.md` — versionCode 来源
