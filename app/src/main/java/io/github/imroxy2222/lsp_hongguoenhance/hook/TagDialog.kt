@@ -216,9 +216,9 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
             tagContainer.removeAllViews()
             val shown = tags.take(MAX_SHOWN_TAGS)
             val maxCount = shown.maxOfOrNull { it.count }?.coerceAtLeast(1) ?: 1
-            for ((text, count, negative) in shown) {
+            for ((text, count, negative, neutral) in shown) {
                 tagContainer.addView(
-                    makeTagRow(text, count, count.toFloat() / maxCount, negative)
+                    makeTagRow(text, count, count.toFloat() / maxCount, negative, neutral)
                 )
             }
             val totalInfo =
@@ -268,9 +268,13 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
     /**
      * 构建一行词条：
      * [词条名 固定宽96dp，超长跑马灯滚动] [条形 weight=1，长度∝fraction] [×N]
-     * negative 词条条形使用"灰黑 → 暗红"渐变，普通词条为"灰黑 → 萤绿"。
+     * negative 词条条形使用"灰黑 → 暗红"渐变，neutral 词条用"灰黑 → 灰黄"渐变，
+     * 普通词条为"灰黑 → 萤绿"。
      */
-    private fun makeTagRow(text: String, count: Int, fraction: Float, negative: Boolean): View {
+    private fun makeTagRow(
+        text: String, count: Int, fraction: Float,
+        negative: Boolean, neutral: Boolean,
+    ): View {
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -292,7 +296,7 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
         )
 
         // 条形：自绘，填充宽度由 fraction 决定，无布局时机问题
-        val bar = BarView(context, fraction.coerceIn(0f, 1f), negative)
+        val bar = BarView(context, fraction.coerceIn(0f, 1f), negative, neutral)
         row.addView(
             bar,
             LinearLayout.LayoutParams(0, dp(18f), 1f).apply { marginStart = dp(8f) }
@@ -393,13 +397,15 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
 
 /**
  * 横向条形（方案A）：深灰圆角轨道 + 按占比填充的渐变圆角条。
- * 普通词条：灰黑 → 萤绿；负面词条（negative=true）：灰黑 → 暗红。
+ * 普通词条：灰黑 → 萤绿；负面词条（negative=true）：灰黑 → 暗红；
+ * 中性词条（neutral=true）：灰黑 → 灰黄。
  * 自绘 View，无布局时机问题。
  */
 private class BarView(
     context: android.content.Context,
     private val fraction: Float,
     private val negative: Boolean,
+    private val neutral: Boolean,
 ) : View(context) {
 
     private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -408,9 +414,12 @@ private class BarView(
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val radius: Float = dp(9f).toFloat()
 
-    /** 渐变终点色：普通 = 萤绿，负面 = 暗红（起点均为灰黑 #242323）。 */
-    private val endColor: Int =
-        if (negative) Color.parseColor("#B22222") else Color.parseColor("#B9FF66")
+    /** 渐变终点色：普通 = 萤绿，负面 = 暗红，中性 = 灰黄（起点均为灰黑 #242323）。 */
+    private val endColor: Int = when {
+        negative -> Color.parseColor("#B22222")
+        neutral -> Color.parseColor("#C9B84C")
+        else -> Color.parseColor("#B9FF66")
+    }
 
     private fun dp(v: Float): Int =
         (v * context.resources.displayMetrics.density + 0.5f).toInt()

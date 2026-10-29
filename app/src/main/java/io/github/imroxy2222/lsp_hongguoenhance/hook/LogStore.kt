@@ -217,7 +217,8 @@ object LogStore {
             val now = System.currentTimeMillis()
             val arr = JSONArray()
             for (t in tags) arr.put(
-                JSONObject().put("tag", t.text).put("count", t.count).put("negative", t.negative)
+                JSONObject().put("tag", t.text).put("count", t.count)
+                    .put("negative", t.negative).put("neutral", t.neutral)
             )
             val dimsJson = dims?.takeIf { it.size == 6 }?.let {
                 JSONObject().apply {
@@ -327,10 +328,11 @@ object LogStore {
                 val tags = ArrayList<AiClient.Tag>(arr.length())
                 for (i in 0 until arr.length()) {
                     val o = arr.getJSONObject(i)
+                    val neg = o.optBoolean("negative", false)
                     tags.add(
                         AiClient.Tag(
-                            o.getString("tag"), o.getInt("count"),
-                            o.optBoolean("negative", false)
+                            o.getString("tag"), o.getInt("count"), neg,
+                            !neg && o.optBoolean("neutral", false) // 旧记录无 neutral 列，默认 false
                         )
                     )
                 }

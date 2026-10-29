@@ -49,7 +49,8 @@ class AiBridgeProvider : ContentProvider() {
             Bundle().apply {
                 putString(EXTRA_TAGS, JSONArray().apply {
                     for (t in result.tags) put(
-                        JSONObject().put("tag", t.text).put("count", t.count).put("negative", t.negative)
+                        JSONObject().put("tag", t.text).put("count", t.count)
+                            .put("negative", t.negative).put("neutral", t.neutral)
                     )
                 }.toString())
                 // 六维评分透传（null = AI 未返回，宿主侧走本地回退）

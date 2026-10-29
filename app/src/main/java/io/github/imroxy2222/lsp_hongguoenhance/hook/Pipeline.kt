@@ -409,8 +409,15 @@ object Pipeline {
             val merged = LinkedHashMap<String, AiClient.Tag>()
             fun add(t: AiClient.Tag) {
                 val e = merged[t.text]
-                merged[t.text] = if (e == null) t
-                else AiClient.Tag(t.text, e.count + t.count, e.negative || t.negative)
+                if (e == null) {
+                    merged[t.text] = t
+                } else {
+                    // negative 按或合并（优先级最高）；仅当合并后仍非负面时保留中性标记
+                    val neg = e.negative || t.negative
+                    merged[t.text] = AiClient.Tag(
+                        t.text, e.count + t.count, neg, !neg && (e.neutral || t.neutral)
+                    )
+                }
             }
             for (t in oldTags) add(t)
             for (t in result.tags) add(t)

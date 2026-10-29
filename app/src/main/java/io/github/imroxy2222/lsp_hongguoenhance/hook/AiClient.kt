@@ -22,13 +22,22 @@ object AiClient {
     private const val READ_TIMEOUT = 120_000
 
     /**
-     * 词条：negative=true 表示负面评价词条（AI 未标注时为 false）。
+     * 词条：negative=true 表示负面评价词条，neutral=true 表示中性/客观描述词条
+     * （两者互斥；AI 未标注时均为 false，即普通词条）。
      */
-    data class Tag(val text: String, val count: Int, val negative: Boolean = false) {
+    data class Tag(val text: String, val count: Int, val negative: Boolean = false, val neutral: Boolean = false) {
+        /** 展示优先级：负面最高 > 普通 > 中性最低（count 相同时的次序）。 */
+        internal val rank: Int
+            get() = when {
+                negative -> 2
+                neutral -> 0
+                else -> 1
+            }
+
         companion object {
-            /** 展示排序：主序 count 降序；count 相同时负面词条（negative=true）排在前面。 */
+            /** 展示排序：主序 count 降序；count 相同时负面 > 普通 > 中性。 */
             val COMPARATOR = compareByDescending<Tag> { it.count }
-                .thenByDescending { it.negative }
+                .thenByDescending { it.rank }
         }
     }
 
@@ -209,13 +218,17 @@ object AiClient {
         return "你是一名短剧评论分析助手。用户会给你一批某部短剧的观众评论，" +
                 "请你从中提炼出描述剧情与人设特点的评价词条，" +
                 "例如：杀伐果断、圣母、无脑爽文、逻辑漏洞、演技在线、节奏拖沓 等。" +
-                "不需要每条评论都提取词条,提取词条为单个词语,不要出现用斜杠分割的多个词语,如\"家人善良/非白眼狼\",同类词语互相合并" +
+                "不必强求每条评论都提取词条,提取词条为单个词语,不要出现用斜杠分割的多个词语,如\"家人善良/非白眼狼\",同类词语互相合并" +
                 "并统计每个词条被评论提及或体现的次数（count）。" +
                 "每个词条用对象表示，除 tag 与 count 外，" +
                 "若该词条属于负面评价（差评、缺点、槽点类），额外加 negative 字段且值为 true；" +
-                "正面或中性词条可省略 negative 字段，或填 false。" +
+                "若该词条属于无明显褒贬的客观描述或中性评价（如题材、体量、类型特征类），" +
+                "额外加 neutral 字段且值为 true；" +
+                "正面词条可省略两个字段，或填 false。negative 与 neutral 不会同时为 true；" +
+                "拿不准褒贬时按普通词条处理，不要滥用 neutral。" +
+                "对于剧集过少,求下一部等的评论需归为中性评价" +
                 "只输出 JSON，不要任何解释、不要 markdown 代码块，格式：" +
-                "{\"tags\":[{\"tag\":\"词条\",\"count\":10,\"negative\":false}]," +
+                "{\"tags\":[{\"tag\":\"词条\",\"count\":10,\"negative\":false,\"neutral\":false}]," +
                 "\"dims\":{\"剧情\":8.5,\"音乐\":7,\"爽感\":8,\"期待\":7.5,\"画面\":8,\"节奏\":8.5}}，" +
                 "按 count 从高到低排列，最多输出 10 个词条。" +
                 "dims 为六维评分：根据这批评论内容，对剧情、音乐、爽感、期待（追更意愿）、" +
@@ -254,7 +267,10 @@ object AiClient {
             val o = arr.getJSONObject(i)
             val t = o.optString("tag").trim()
             if (t.isEmpty()) continue
-            tags.add(Tag(t, o.optInt("count", 0), o.optBoolean("negative", false)))
+            // negative 优先于 neutral：模型若同时标注，按负面处理
+            val neg = o.optBoolean("negative", false)
+            val neu = !neg && o.optBoolean("neutral", false)
+            tags.add(Tag(t, o.optInt("count", 0), neg, neu))
         }
         if (tags.isEmpty()) throw AiException("AI 未返回有效词条: ${content.take(200)}")
         Log.i(TAG, "AI tags: ${tags.size}, dims: ${obj.optJSONObject("dims") != null}")
