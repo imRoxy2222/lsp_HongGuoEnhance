@@ -117,7 +117,9 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
         retryBtn = Button(context).apply {
             text = "重试"
             visibility = View.GONE
-            setOnClickListener { Pipeline.loadMore(seriesId) }
+            // 重试 = 用已采集的评论重新调用 AI（不拉新评论）；
+            // 拉新评论是"继续加载"按钮的职责
+            setOnClickListener { Pipeline.retry(seriesId) }
         }
         btnRow.addView(
             loadMoreBtn,

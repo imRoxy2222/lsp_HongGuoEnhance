@@ -256,6 +256,23 @@ object Pipeline {
         }
     }
 
+    /**
+     * "重试"（ERROR 状态下的重试按钮）：**重新调用 AI**，使用已采集的评论，
+     * 不拉取新评论——与"继续加载"（拉新批 + 增量总结）语义不同。
+     *
+     * - AI 总结失败：把当前 cache.comments 全量重发给 AI（全量模式，非增量）；
+     * - 首次采集就失败（一条评论都没有）：退回重新走采集流程。
+     */
+    fun retry(seriesId: String) {
+        val cache = caches.getOrPut(seriesId) { SeriesCache(seriesId, SeriesIdHolder.nameOf(seriesId)) }
+        if (cache.state == State.COLLECTING || cache.state == State.AI_PENDING) return
+        if (cache.comments.isEmpty()) {
+            startInitialCollect(seriesId)
+        } else {
+            runAi(seriesId)
+        }
+    }
+
     /** 首次采集：连续拉页直至达到目标评论数（默认 50）或没有更多。 */
     private fun startInitialCollect(seriesId: String) {
         executor.execute {
