@@ -514,10 +514,10 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("AI 走模块进程", style = MaterialTheme.typography.bodyLarge)
+                    Text("AI网络走模块进程", style = MaterialTheme.typography.bodyLarge)
                     Spacer(Modifier.width(6.dp))
                     HelpBadge(
-                        title = "AI 走模块进程",
+                        title = "AI网络走模块进程",
                         help = "开启后 AI 请求由本模块自身的进程发出，而不是红果短剧进程。\n\n" +
                                 "用途：使用国外大模型时，代理/VPN 白名单只需放行本模块应用，" +
                                 "红果（视频流量大）无需走代理，节省流量。\n\n" +
