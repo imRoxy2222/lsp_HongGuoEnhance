@@ -3,17 +3,21 @@
 一个基于 **libxposed API 102** 的 LSPosed 模块，作用于红果短剧（`com.phoenix.read`）。
 在短剧播放页点击分享按钮时，不再弹出原分享面板，而是弹出自写的 **"评论词条"** 页面：自动拉取该剧的剧评，交给 AI 总结出如 `杀伐果断 ×10`、`圣母 ×4` 的剧情词条，帮助用户快速判断这部剧的好坏。
 
+# LSPosed仓库
+
+有关模块UI展示, 使用文档等信息, 可查看LSPosed仓库内的[README文件](https://github.com/Xposed-Modules-Repo/io.github.imroxy2222.lsp_hongguoenhance#%E6%A8%A1%E5%9D%97UI%E5%B1%95%E7%A4%BA)
+
 ## 功能特性
 
-| 功能 | 说明 |
-| --- | --- |
-| 分享按钮 Hook | 拦截 `NsShareProxy.showShortSeriesSharePanel`，用"评论词条"页替换原分享面板 |
-| 评论词条页 | 纯代码构建的深色圆角对话框，词条按数量降序展示，附出现次数 |
-| 剧评采集 | 复用 app 自身 RPC（`CommentApiService` / 包装层 `h.e`），默认采集 50 条字数 > 20 的评论，支持"继续加载"分页追加 |
-| AI 词条总结 | OpenAI 兼容 `/chat/completions` 接口，Base URL / API Key / 模型名均可自行配置；"继续加载"仅增量总结新评论并客户端合并词条计数 |
-| 结果缓存 | 两级缓存（内存 + 宿主 SQLite 持久化），杀掉 app 重开后词条秒出，不重复调用 AI |
-| 评论词条日志 | 按剧存 SQLite（评论含"是否交给 AI"标记 + AI 请求/响应原文），模块 App 内两级页面查看（评论点击展开 + 红/绿竖条标记），支持按天数/总大小自动清理 |
-| 模块设置页 | Compose 编写的模块自身界面，通过 libxposed remote preferences 跨进程下发配置 |
+| 功能          | 说明                                                                                                                                            |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| 分享按钮 Hook | 拦截 `NsShareProxy.showShortSeriesSharePanel`，用"评论词条"页替换原分享面板                                                                     |
+| 评论词条页    | 纯代码构建的深色圆角对话框，词条按数量降序展示，附出现次数                                                                                      |
+| 剧评采集      | 复用 app 自身 RPC（`CommentApiService` / 包装层 `h.e`），默认采集 50 条字数 > 20 的评论，支持"继续加载"分页追加                                 |
+| AI 词条总结   | OpenAI 兼容 `/chat/completions` 接口，Base URL / API Key / 模型名均可自行配置；"继续加载"仅增量总结新评论并客户端合并词条计数                   |
+| 结果缓存      | 两级缓存（内存 + 宿主 SQLite 持久化），杀掉 app 重开后词条秒出，不重复调用 AI                                                                   |
+| 评论词条日志  | 按剧存 SQLite（评论含"是否交给 AI"标记 + AI 请求/响应原文），模块 App 内两级页面查看（评论点击展开 + 红/绿竖条标记），支持按天数/总大小自动清理 |
+| 模块设置页    | Compose 编写的模块自身界面，通过 libxposed remote preferences 跨进程下发配置                                                                    |
 
 ## 环境要求
 

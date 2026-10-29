@@ -2,6 +2,7 @@ package io.github.imroxy2222.lsp_hongguoenhance.hook
 
 import android.content.SharedPreferences
 import io.github.libxposed.api.XposedInterface
+import org.json.JSONObject
 
 /**
  * 模块配置（宿主进程侧读取）。
@@ -19,6 +20,8 @@ object ModuleConfig {
     const val KEY_TARGET_COUNT = "target_count"   // 首次采集目标评论数
     const val KEY_PAGE_COUNT = "page_count"       // 单批加载评论数
     const val KEY_EXTRA_PROMPT = "extra_prompt"   // 用户附加提示词
+    const val KEY_PROMPT_PRESET = "prompt_preset" // 提示词预设模板 id（PromptPresets.NONE_ID=自定义文本）
+    const val KEY_PROMPT_PRESET_OVERRIDES = "prompt_preset_overrides" // 预设模板用户改写（JSON {id:文本}）
     const val KEY_LOG_RETENTION_DAYS = "log_retention_days" // 日志保留天数（0=不按天清理）
     const val KEY_LOG_MAX_SIZE_MB = "log_max_size_mb"       // 日志总大小上限 MB（0=不按大小清理）
     const val KEY_LOG_TOKEN = "log_token"         // 日志服务访问令牌（设置页生成，宿主校验）
@@ -141,6 +144,33 @@ object ModuleConfig {
         p().getInt(KEY_PAGE_COUNT, DEFAULT_PAGE_COUNT).coerceIn(5, 30)
 
     fun extraPrompt(): String = p().getString(KEY_EXTRA_PROMPT, null).orEmpty()
+
+    /** 提示词预设模板 id（PromptPresets.NONE_ID = 未选预设，用自定义附加提示词）。 */
+    fun promptPresetId(): String =
+        p().getString(KEY_PROMPT_PRESET, null)?.takeIf { it.isNotEmpty() } ?: PromptPresets.NONE_ID
+
+    /** 预设模板的用户改写文本（未改写返回 null，用 PromptPresets 内置模板）。 */
+    fun promptPresetOverride(id: String): String? = runCatching {
+        p().getString(KEY_PROMPT_PRESET_OVERRIDES, null)
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { JSONObject(it).optString(id, "") }
+    }.getOrNull()?.takeIf { it.isNotEmpty() }
+
+    /**
+     * 保存/清除预设模板改写（设置页编辑弹窗用）。
+     * [template] 为 null 或空白时删除改写条目 = 恢复内置默认模板。
+     */
+    fun setPromptPresetOverride(id: String, template: String?) {
+        val e = p().edit()
+        runCatching {
+            val obj = p().getString(KEY_PROMPT_PRESET_OVERRIDES, null)
+                ?.takeIf { it.isNotEmpty() }?.let { JSONObject(it) } ?: JSONObject()
+            if (template.isNullOrBlank()) obj.remove(id) else obj.put(id, template)
+            if (obj.length() == 0) e.remove(KEY_PROMPT_PRESET_OVERRIDES)
+            else e.putString(KEY_PROMPT_PRESET_OVERRIDES, obj.toString())
+        }
+        e.apply()
+    }
 
     /** AI 请求是否携带"关闭思考"字段（未配置时默认开启）。 */
     fun disableThinking(): Boolean =

@@ -196,7 +196,8 @@ object AiClient {
     )
 
     private fun buildSystemPrompt(previousTags: List<String>): String {
-        val extra = ModuleConfig.extraPrompt()
+        // 选中预设模板时模板文本替代自定义附加提示词；未选中沿用自定义文本
+        val extra = PromptPresets.resolve(ModuleConfig.promptPresetId(), ModuleConfig.extraPrompt())
         // "继续加载"增量模式下带上已有词条：优先沿用同名词条，方便累计合并；
         // 仅是优先而非强制，避免新特点被旧词条集合限死
         val prefer = if (previousTags.isEmpty()) "" else

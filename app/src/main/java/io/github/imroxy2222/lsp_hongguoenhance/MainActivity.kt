@@ -10,12 +10,14 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,6 +32,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import io.github.imroxy2222.lsp_hongguoenhance.hook.AiClient
 import io.github.imroxy2222.lsp_hongguoenhance.hook.ModuleConfig
+import io.github.imroxy2222.lsp_hongguoenhance.hook.PromptPresets
 import io.github.imroxy2222.lsp_hongguoenhance.ui.theme.HongGuoEnhanceTheme
 import io.github.libxposed.service.XposedService
 
@@ -111,11 +114,11 @@ class MainActivity : ComponentActivity() {
                     },
                     onSave = { baseUrl, apiKey, model, targetCount, pageCount, extraPrompt,
                                logRetentionDays, logMaxSizeMb, disableThinking, aiViaModule,
-                               radarDefault, thinkingProviders ->
+                               radarDefault, promptPreset, thinkingProviders ->
                         saveConfig(
                             baseUrl, apiKey, model, targetCount, pageCount, extraPrompt,
                             logRetentionDays, logMaxSizeMb, disableThinking, aiViaModule,
-                            radarDefault, thinkingProviders
+                            radarDefault, promptPreset, thinkingProviders
                         )
                     },
                     onOpenLogs = {
@@ -169,6 +172,7 @@ class MainActivity : ComponentActivity() {
                 ModuleConfig.KEY_PAGE_COUNT, ModuleConfig.DEFAULT_PAGE_COUNT
             ),
             ModuleConfig.KEY_EXTRA_PROMPT to (p.getString(ModuleConfig.KEY_EXTRA_PROMPT, "") ?: ""),
+            ModuleConfig.KEY_PROMPT_PRESET to (p.getString(ModuleConfig.KEY_PROMPT_PRESET, "") ?: ""),
             ModuleConfig.KEY_LOG_RETENTION_DAYS to p.getInt(
                 ModuleConfig.KEY_LOG_RETENTION_DAYS, ModuleConfig.DEFAULT_LOG_RETENTION_DAYS
             ),
@@ -195,7 +199,7 @@ class MainActivity : ComponentActivity() {
         targetCount: Int, pageCount: Int, extraPrompt: String,
         logRetentionDays: Int, logMaxSizeMb: Int,
         disableThinking: Boolean, aiViaModule: Boolean,
-        radarDefault: Boolean, thinkingProviders: Set<String>,
+        radarDefault: Boolean, promptPreset: String, thinkingProviders: Set<String>,
     ) {
         val s = service
         if (s == null) {
@@ -210,6 +214,7 @@ class MainActivity : ComponentActivity() {
             .putInt(ModuleConfig.KEY_TARGET_COUNT, targetCount)
             .putInt(ModuleConfig.KEY_PAGE_COUNT, pageCount)
             .putString(ModuleConfig.KEY_EXTRA_PROMPT, extraPrompt)
+            .putString(ModuleConfig.KEY_PROMPT_PRESET, promptPreset)
             .putInt(ModuleConfig.KEY_LOG_RETENTION_DAYS, logRetentionDays)
             .putInt(ModuleConfig.KEY_LOG_MAX_SIZE_MB, logMaxSizeMb)
             .putBoolean(ModuleConfig.KEY_DISABLE_THINKING, disableThinking)
@@ -230,7 +235,7 @@ fun SettingsScreen(
     rootFramework: Boolean,
     frameworkLabel: String?,
     onScopeRequest: () -> Unit,
-    onSave: (String, String, String, Int, Int, String, Int, Int, Boolean, Boolean, Boolean, Set<String>) -> Unit,
+    onSave: (String, String, String, Int, Int, String, Int, Int, Boolean, Boolean, Boolean, String, Set<String>) -> Unit,
     onOpenLogs: () -> Unit,
     onOpenFilterRules: () -> Unit,
     onHideIconChange: (Boolean) -> Unit,
@@ -256,6 +261,12 @@ fun SettingsScreen(
         )
     }
     var extraPrompt by remember(initial) { mutableStateOf(str(ModuleConfig.KEY_EXTRA_PROMPT, "")) }
+    var promptPreset by remember(initial) {
+        mutableStateOf(
+            (initial?.get(ModuleConfig.KEY_PROMPT_PRESET) as? String)
+                ?.takeUnless { it.isEmpty() } ?: PromptPresets.NONE_ID
+        )
+    }
     var thinkingProviders by remember(initial) {
         // 旧配置兼容：以前把"取消思考"显式关闭过（disable_thinking=false）视为全不勾
         val masterOn = (initial?.get(ModuleConfig.KEY_DISABLE_THINKING) as? Boolean)
@@ -308,6 +319,7 @@ fun SettingsScreen(
         targetCount.toIntOrNull()?.coerceIn(10, 200) ?: ModuleConfig.DEFAULT_TARGET_COUNT,
         pageCount.toIntOrNull()?.coerceIn(5, 30) ?: ModuleConfig.DEFAULT_PAGE_COUNT,
         extraPrompt,
+        promptPreset,
         logRetentionDays.toIntOrNull()?.coerceIn(0, 3650)
             ?: ModuleConfig.DEFAULT_LOG_RETENTION_DAYS,
         logMaxSizeMb.toIntOrNull()?.coerceIn(0, 4096)
@@ -341,6 +353,7 @@ fun SettingsScreen(
             thinkingProviders.isNotEmpty(),  // 主开关 = 是否勾选了任一平台
             aiViaModule,
             radarDefault,
+            promptPreset,
             thinkingProviders
         )
     }
@@ -598,16 +611,158 @@ fun SettingsScreen(
                         onFocusLost = { autoSave() }
                     )
                 }
-                HelpField(
-                    title = "附加提示词",
-                    help = "可选。追加到系统提示词末尾的额外要求，用于自定义 AI 总结的风格与侧重点。",
-                    value = extraPrompt,
-                    onValueChange = { extraPrompt = it },
-                    placeholder = "可选，追加到系统提示词末尾",
-                    singleLine = false,
-                    minLines = 5,
-                    onFocusLost = { autoSave() }
-                )
+                // 提示词预设模板：下拉选择框（item 右侧编辑图标可改模板文本，支持恢复默认；
+                // 新增模板只需在 PromptPresets.PRESETS 加条目）
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("提示词预设", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.width(6.dp))
+                    HelpBadge(
+                        title = "提示词预设",
+                        help = "一键切换总结风格的提示词模板（安利向/避雷向/深度解析/无剧透）。\n\n" +
+                                "选中预设后，模板文本会替代下方的自定义\"附加提示词\"，" +
+                                "以\"用户补充要求\"的形式追加给 AI；" +
+                                "选「自定义」则恢复使用你自己输入的附加提示词。\n\n" +
+                                "下拉列表每项右侧的编辑图标可直接修改该条提示词" +
+                                "（预设改写后标注\"已修改\"，可随时恢复默认）。"
+                    )
+                }
+                var presetMenuExpanded by remember { mutableStateOf(false) }
+                var editingPromptId by remember { mutableStateOf<String?>(null) }
+                val selectedPreset0 = PromptPresets.byId(promptPreset)
+                ExposedDropdownMenuBox(
+                    expanded = presetMenuExpanded,
+                    onExpandedChange = { presetMenuExpanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = selectedPreset0?.label ?: "自定义",
+                        onValueChange = {},
+                        readOnly = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = presetMenuExpanded)
+                        }
+                    )
+                    ExposedDropdownMenu(
+                        expanded = presetMenuExpanded,
+                        onDismissRequest = { presetMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("自定义") },
+                            onClick = {
+                                promptPreset = PromptPresets.NONE_ID
+                                autoSave()
+                                presetMenuExpanded = false
+                            },
+                            trailingIcon = {
+                                IconButton(
+                                    onClick = { editingPromptId = PromptPresets.NONE_ID }
+                                ) {
+                                    Icon(Icons.Filled.Edit, contentDescription = "编辑自定义提示词")
+                                }
+                            }
+                        )
+                        for (preset in PromptPresets.PRESETS) {
+                            val edited = ModuleConfig.promptPresetOverride(preset.id) != null
+                            DropdownMenuItem(
+                                text = { Text(if (edited) "${preset.label}（已修改）" else preset.label) },
+                                onClick = {
+                                    promptPreset = preset.id
+                                    autoSave()
+                                    presetMenuExpanded = false
+                                },
+                                trailingIcon = {
+                                    IconButton(onClick = { editingPromptId = preset.id }) {
+                                        Icon(Icons.Filled.Edit, contentDescription = "编辑${preset.label}模板")
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+                val selectedPreset = PromptPresets.byId(promptPreset)
+                if (selectedPreset != null) {
+                    Text(
+                        "${selectedPreset.description} · 模板已生效，替代下方自定义附加提示词",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    HelpField(
+                        title = "附加提示词",
+                        help = "可选。追加到系统提示词末尾的额外要求，用于自定义 AI 总结的风格与侧重点。",
+                        value = extraPrompt,
+                        onValueChange = { extraPrompt = it },
+                        placeholder = "可选，追加到系统提示词末尾",
+                        singleLine = false,
+                        minLines = 5,
+                        onFocusLost = { autoSave() }
+                    )
+                }
+                // 预设/自定义提示词编辑弹窗：右下角 保存 + 默认值（默认值需二次确认）
+                editingPromptId?.let { eid ->
+                    val isCustom = eid == PromptPresets.NONE_ID
+                    val editLabel = if (isCustom) "自定义" else (PromptPresets.byId(eid)?.label ?: eid)
+                    val initial = if (isCustom) extraPrompt
+                        else (PromptPresets.effectiveTemplate(eid) ?: "")
+                    var text by remember(eid) { mutableStateOf(initial) }
+                    var confirmReset by remember(eid) { mutableStateOf(false) }
+                    AlertDialog(
+                        onDismissRequest = { editingPromptId = null },
+                        title = { Text("编辑「$editLabel」提示词") },
+                        text = {
+                            OutlinedTextField(
+                                value = text,
+                                onValueChange = { text = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 5,
+                                placeholder = { Text("提示词内容，将以\"用户补充要求\"追加给 AI") }
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                if (isCustom) {
+                                    extraPrompt = text
+                                    autoSave()
+                                } else {
+                                    ModuleConfig.setPromptPresetOverride(eid, text)
+                                }
+                                editingPromptId = null
+                            }) { Text("保存") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { confirmReset = true }) { Text("默认值") }
+                        }
+                    )
+                    if (confirmReset) {
+                        AlertDialog(
+                            onDismissRequest = { confirmReset = false },
+                            title = { Text("恢复默认") },
+                            text = {
+                                Text(
+                                    if (isCustom) "将清空自定义附加提示词，确定吗？"
+                                    else "将丢弃你对「$editLabel」模板的全部修改，恢复为内置默认文本。确定吗？"
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    if (isCustom) {
+                                        extraPrompt = ""
+                                        autoSave()
+                                    } else {
+                                        ModuleConfig.setPromptPresetOverride(eid, null)
+                                        text = PromptPresets.byId(eid)?.template ?: ""
+                                    }
+                                    confirmReset = false
+                                }) { Text("确定") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { confirmReset = false }) { Text("取消") }
+                            }
+                        )
+                    }
+                }
                 // 过滤规则入口：跳转二级页面管理排除型正则（该页面自行即时保存，与主页自动保存独立）
                 Row(
                     modifier = Modifier
