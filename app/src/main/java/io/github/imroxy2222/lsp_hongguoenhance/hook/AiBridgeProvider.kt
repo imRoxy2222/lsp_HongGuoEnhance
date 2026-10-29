@@ -52,6 +52,12 @@ class AiBridgeProvider : ContentProvider() {
                         JSONObject().put("tag", t.text).put("count", t.count).put("negative", t.negative)
                     )
                 }.toString())
+                // 六维评分透传（null = AI 未返回，宿主侧走本地回退）
+                result.dims?.takeIf { it.size == 6 }?.let {
+                    putString(EXTRA_DIMS, JSONObject().apply {
+                        DimensionAnalyzer.LABELS.forEachIndexed { i, label -> put(label, it[i].toDouble()) }
+                    }.toString())
+                }
                 putString(EXTRA_RESPONSE, result.response)
             }
         } catch (t: Throwable) {
@@ -79,6 +85,7 @@ class AiBridgeProvider : ContentProvider() {
         const val METHOD_SUMMARIZE = "summarize"
         const val EXTRA_REQUEST = "request"
         const val EXTRA_TAGS = "tags"
+        const val EXTRA_DIMS = "dims"
         const val EXTRA_RESPONSE = "response"
         const val EXTRA_ERROR = "error"
         const val KEY_BASE_URL = "base_url"

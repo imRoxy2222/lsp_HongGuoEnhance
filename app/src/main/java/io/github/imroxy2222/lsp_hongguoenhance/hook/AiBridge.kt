@@ -58,8 +58,19 @@ object AiBridge {
             val o = arr.getJSONObject(i)
             tags.add(AiClient.Tag(o.getString("tag"), o.getInt("count"), o.optBoolean("negative", false)))
         }
-        Logger.i("ai summarize via module process: tags=${tags.size}")
-        return AiClient.AiResult(tags, requestText, response)
+        // 六维评分：桥应答里的 {"剧情":8.5,...}，缺失/损坏为 null（调用方本地回退）
+        val dims: FloatArray? = reply.getString(AiBridgeProvider.EXTRA_DIMS)?.let { dj ->
+            try {
+                val o = JSONObject(dj)
+                FloatArray(DimensionAnalyzer.LABELS.size) { i ->
+                    o.getDouble(DimensionAnalyzer.LABELS[i]).toFloat().coerceIn(1f, 10f)
+                }
+            } catch (t: Throwable) {
+                null
+            }
+        }
+        Logger.i("ai summarize via module process: tags=${tags.size}, dims=${dims != null}")
+        return AiClient.AiResult(tags, requestText, response, dims)
     }
 
     private fun authorityUri(): Uri = Uri.Builder()

@@ -32,8 +32,14 @@ object AiClient {
         }
     }
 
-    /** 一次 AI 调用的完整结果：词条 + 发送的请求体 + 原始响应（日志用）。 */
-    data class AiResult(val tags: List<Tag>, val request: String, val response: String)
+    /** 一次 AI 调用的完整结果：词条 + 六维评分 + 发送的请求体 + 原始响应（日志用）。
+     *  dims = [剧情,音乐,爽感,期待,画面,节奏] 各 1~10 分；AI 未返回（或部分缺失）为 null。 */
+    data class AiResult(
+        val tags: List<Tag>,
+        val request: String,
+        val response: String,
+        val dims: FloatArray? = null,
+    )
 
     class AiException(message: String) : Exception(message)
 
@@ -121,7 +127,8 @@ object AiClient {
             if (code !in 200..299) {
                 throw AiException("AI 接口返回 $code: ${text.take(300)}")
             }
-            return AiResult(parseTags(text), requestText, text)
+            val (tags, dims) = parseResult(text)
+            return AiResult(tags, requestText, text, dims)
         } finally {
             conn.disconnect()
         }
@@ -207,8 +214,12 @@ object AiClient {
                 "若该词条属于负面评价（差评、缺点、槽点类），额外加 negative 字段且值为 true；" +
                 "正面或中性词条可省略 negative 字段，或填 false。" +
                 "只输出 JSON，不要任何解释、不要 markdown 代码块，格式：" +
-                "{\"tags\":[{\"tag\":\"词条\",\"count\":10,\"negative\":false}]}，按 count 从高到低排列，" +
-                "最多输出 10 个词条。" +
+                "{\"tags\":[{\"tag\":\"词条\",\"count\":10,\"negative\":false}]," +
+                "\"dims\":{\"剧情\":8.5,\"音乐\":7,\"爽感\":8,\"期待\":7.5,\"画面\":8,\"节奏\":8.5}}，" +
+                "按 count 从高到低排列，最多输出 10 个词条。" +
+                "dims 为六维评分：根据这批评论内容，对剧情、音乐、爽感、期待（追更意愿）、" +
+                "画面、节奏六个维度各打 1~10 分（一位小数）；" +
+                "评论完全未涉及的维度给 5 分左右的中间分，不要凭空猜测。" +
                 (if (prefer.isNotEmpty()) "\n$prefer" else "") +
                 (if (extra.isNotEmpty()) "\n用户补充要求：$extra" else "")
     }
@@ -223,15 +234,20 @@ object AiClient {
         return sb.toString()
     }
 
-    /** 从模型返回中提取 JSON 并解析词条，按 count 降序。 */
-    private fun parseTags(raw: String): List<Tag> {
+    /**
+     * 从模型返回中提取 JSON 并解析词条与六维评分。
+     * 词条按 count 降序；dims 缺失、部分维度缺失或解析失败时为 null
+     * （调用方回退本地关键词分析，不影响词条主流程）。
+     */
+    private fun parseResult(raw: String): Pair<List<Tag>, FloatArray?> {
         val content = JSONObject(raw)
             .getJSONArray("choices")
             .getJSONObject(0)
             .getJSONObject("message")
             .getString("content")
         val json = extractJson(content)
-        val arr = JSONObject(json).getJSONArray("tags")
+        val obj = JSONObject(json)
+        val arr = obj.getJSONArray("tags")
         val tags = ArrayList<Tag>(arr.length())
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
@@ -240,8 +256,17 @@ object AiClient {
             tags.add(Tag(t, o.optInt("count", 0), o.optBoolean("negative", false)))
         }
         if (tags.isEmpty()) throw AiException("AI 未返回有效词条: ${content.take(200)}")
-        Log.i(TAG, "AI tags: ${tags.size}")
-        return tags.sortedWith(Tag.COMPARATOR)
+        Log.i(TAG, "AI tags: ${tags.size}, dims: ${obj.optJSONObject("dims") != null}")
+        val dims = obj.optJSONObject("dims")?.let { d ->
+            try {
+                FloatArray(DimensionAnalyzer.LABELS.size) { i ->
+                    d.getDouble(DimensionAnalyzer.LABELS[i]).toFloat().coerceIn(1f, 10f)
+                }
+            } catch (t: Throwable) {
+                null // 任一维度缺失/类型不对 → 整体视为未返回，走本地回退
+            }
+        }
+        return tags.sortedWith(Tag.COMPARATOR) to dims
     }
 
     /** 容错提取 JSON（去掉 markdown 围栏/前后说明文字）。 */
@@ -259,6 +284,7 @@ object AiClient {
             listOf("这部剧很好看，主角杀伐果断不拖泥带水，强烈推荐大家观看。"), null
         )
         val ms = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)
-        return "连接成功，耗时 ${ms}ms，词条 ${r.tags.size} 个"
+        return "连接成功，耗时 ${ms}ms，词条 ${r.tags.size} 个" +
+                if (r.dims != null) "，六维评分正常" else ""
     }
 }

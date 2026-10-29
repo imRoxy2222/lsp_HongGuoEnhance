@@ -111,11 +111,11 @@ class MainActivity : ComponentActivity() {
                     },
                     onSave = { baseUrl, apiKey, model, targetCount, pageCount, extraPrompt,
                                logRetentionDays, logMaxSizeMb, disableThinking, aiViaModule,
-                               thinkingProviders ->
+                               radarDefault, thinkingProviders ->
                         saveConfig(
                             baseUrl, apiKey, model, targetCount, pageCount, extraPrompt,
                             logRetentionDays, logMaxSizeMb, disableThinking, aiViaModule,
-                            thinkingProviders
+                            radarDefault, thinkingProviders
                         )
                     },
                     onOpenLogs = {
@@ -183,6 +183,9 @@ class MainActivity : ComponentActivity() {
             ) ?: ""),
             ModuleConfig.KEY_AI_VIA_MODULE to p.getBoolean(
                 ModuleConfig.KEY_AI_VIA_MODULE, ModuleConfig.DEFAULT_AI_VIA_MODULE
+            ),
+            ModuleConfig.KEY_RADAR_DEFAULT to p.getBoolean(
+                ModuleConfig.KEY_RADAR_DEFAULT, ModuleConfig.DEFAULT_RADAR_DEFAULT
             )
         )
     }
@@ -192,7 +195,7 @@ class MainActivity : ComponentActivity() {
         targetCount: Int, pageCount: Int, extraPrompt: String,
         logRetentionDays: Int, logMaxSizeMb: Int,
         disableThinking: Boolean, aiViaModule: Boolean,
-        thinkingProviders: Set<String>,
+        radarDefault: Boolean, thinkingProviders: Set<String>,
     ) {
         val s = service
         if (s == null) {
@@ -211,6 +214,7 @@ class MainActivity : ComponentActivity() {
             .putInt(ModuleConfig.KEY_LOG_MAX_SIZE_MB, logMaxSizeMb)
             .putBoolean(ModuleConfig.KEY_DISABLE_THINKING, disableThinking)
             .putBoolean(ModuleConfig.KEY_AI_VIA_MODULE, aiViaModule)
+            .putBoolean(ModuleConfig.KEY_RADAR_DEFAULT, radarDefault)
             .putString(ModuleConfig.KEY_THINKING_PROVIDERS, thinkingProviders.joinToString(","))
             .apply()
         Toast.makeText(this, "已自动保存", Toast.LENGTH_SHORT).show()
@@ -226,7 +230,7 @@ fun SettingsScreen(
     rootFramework: Boolean,
     frameworkLabel: String?,
     onScopeRequest: () -> Unit,
-    onSave: (String, String, String, Int, Int, String, Int, Int, Boolean, Boolean, Set<String>) -> Unit,
+    onSave: (String, String, String, Int, Int, String, Int, Int, Boolean, Boolean, Boolean, Set<String>) -> Unit,
     onOpenLogs: () -> Unit,
     onOpenFilterRules: () -> Unit,
     onHideIconChange: (Boolean) -> Unit,
@@ -273,6 +277,12 @@ fun SettingsScreen(
                 ?: ModuleConfig.DEFAULT_AI_VIA_MODULE
         )
     }
+    var radarDefault by remember(initial) {
+        mutableStateOf(
+            (initial?.get(ModuleConfig.KEY_RADAR_DEFAULT) as? Boolean)
+                ?: ModuleConfig.DEFAULT_RADAR_DEFAULT
+        )
+    }
     var logRetentionDays by remember(initial) {
         mutableStateOf(
             ((initial?.get(ModuleConfig.KEY_LOG_RETENTION_DAYS) as? Int)
@@ -303,7 +313,8 @@ fun SettingsScreen(
         logMaxSizeMb.toIntOrNull()?.coerceIn(0, 4096)
             ?: ModuleConfig.DEFAULT_LOG_MAX_SIZE_MB,
         thinkingProviders.sorted().joinToString(","),
-        aiViaModule
+        aiViaModule,
+        radarDefault
     ).joinToString("\u0000")
 
     /** 与初始加载配置对齐的基线签名：内容未变时不触发保存与 Toast。 */
@@ -329,6 +340,7 @@ fun SettingsScreen(
                 ?: ModuleConfig.DEFAULT_LOG_MAX_SIZE_MB,
             thinkingProviders.isNotEmpty(),  // 主开关 = 是否勾选了任一平台
             aiViaModule,
+            radarDefault,
             thinkingProviders
         )
     }
@@ -530,6 +542,34 @@ fun SettingsScreen(
                         checked = aiViaModule,
                         onCheckedChange = {
                             aiViaModule = it
+                            autoSave()
+                        }
+                    )
+                }
+            }
+
+            // ── 展示设置 ───────────────────────────────────────────────
+            SettingsSection(title = "展示设置") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("默认显示六维雷达图", style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.width(6.dp))
+                    HelpBadge(
+                        title = "默认显示六维雷达图",
+                        help = "评论词条弹窗支持左右滑动，在「评论词条 ⇄ 六维评分」两页间循环切换。\n\n" +
+                                "开启后打开弹窗默认停在六维评分页，关闭则停在词条条形图页；" +
+                                "仅影响默认停留页，滑动切换始终可用。\n\n" +
+                                "六维评分（剧情/音乐/爽感/期待/画面/节奏）由本地关键词" +
+                                "对已采集评论做正/负倾向投票推算，不额外消耗 AI 调用；" +
+                                "从未被提及的维度取整体平均分。"
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Switch(
+                        checked = radarDefault,
+                        onCheckedChange = {
+                            radarDefault = it
                             autoSave()
                         }
                     )

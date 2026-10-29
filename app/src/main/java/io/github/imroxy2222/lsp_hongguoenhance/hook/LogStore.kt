@@ -30,7 +30,7 @@ import org.json.JSONObject
 object LogStore {
     private const val TAG = HookEntry.TAG
     private const val DB_NAME = "hge_logs.db"
-    private const val DB_VERSION = 4
+    private const val DB_VERSION = 5
 
     /** 清理检查最小间隔：避免每次追加都全表扫描。 */
     private const val RETENTION_CHECK_INTERVAL_MS = 60 * 60 * 1000L
@@ -70,7 +70,8 @@ object LogStore {
                     "base_count INTEGER NOT NULL DEFAULT 0," +
                     "request TEXT," +
                     "response TEXT," +
-                    "tags TEXT)"
+                    "tags TEXT," +
+                    "dims TEXT)"
             )
             db.execSQL("CREATE INDEX idx_ai_series ON ai_log(series_id, _id)")
             db.execSQL(
@@ -95,6 +96,11 @@ object LogStore {
             // v4：comment 增加丢弃原因列（如"命中过滤器2,规则更新"，日志页展示用）
             if (oldVersion < 4) {
                 db.execSQL("ALTER TABLE comment ADD COLUMN drop_reason TEXT")
+            }
+            // v5：ai_log 增加六维评分列（AI 输出的 剧情/音乐/爽感/期待/画面/节奏 分值，
+            //     JSON 对象字符串 {"剧情":8.5,...}；恢复会话时雷达图直接复用）
+            if (oldVersion < 5) {
+                db.execSQL("ALTER TABLE ai_log ADD COLUMN dims TEXT")
             }
         }
     }
@@ -197,13 +203,14 @@ object LogStore {
         }
     }
 
-    /** 写入一次 AI 词条总结（含发送的完整请求体与 AI 原始响应）。 */
+    /** 写入一次 AI 词条总结（含发送的完整请求体、AI 原始响应与六维评分）。 */
     fun appendTags(
         seriesId: String,
         tags: List<AiClient.Tag>,
         baseCount: Int,
         request: String?,
         response: String?,
+        dims: FloatArray? = null,
     ) {
         val d = db() ?: return
         try {
@@ -212,13 +219,18 @@ object LogStore {
             for (t in tags) arr.put(
                 JSONObject().put("tag", t.text).put("count", t.count).put("negative", t.negative)
             )
+            val dimsJson = dims?.takeIf { it.size == 6 }?.let {
+                JSONObject().apply {
+                    DimensionAnalyzer.LABELS.forEachIndexed { i, label -> put(label, it[i].toDouble()) }
+                }.toString()
+            }
             val w = d.writableDatabase
             w.beginTransaction()
             try {
                 touchSeries(w, seriesId, null, now)
                 w.execSQL(
-                    "INSERT INTO ai_log(series_id, time, base_count, request, response, tags) VALUES(?,?,?,?,?,?)",
-                    arrayOf(seriesId, now, baseCount, request, response, arr.toString())
+                    "INSERT INTO ai_log(series_id, time, base_count, request, response, tags, dims) VALUES(?,?,?,?,?,?,?)",
+                    arrayOf(seriesId, now, baseCount, request, response, arr.toString(), dimsJson)
                 )
                 w.setTransactionSuccessful()
             } finally {
@@ -231,8 +243,13 @@ object LogStore {
 
     // ---------------------------------------------------------------- 回读（词条持久缓存）
 
-    /** 可跨 app 重启复用的历史总结。 */
-    class CachedSummary(val tags: List<AiClient.Tag>, val baseCount: Int, val time: Long)
+    /** 可跨 app 重启复用的历史总结。dims = AI 六维评分（旧记录/解析失败为 null）。 */
+    class CachedSummary(
+        val tags: List<AiClient.Tag>,
+        val baseCount: Int,
+        val time: Long,
+        val dims: FloatArray? = null,
+    )
 
     /** 持久化分页游标：恢复会话后"继续加载"能从正确位置续拉。 */
     fun saveCursor(seriesId: String, cursor: String?) {
@@ -300,7 +317,7 @@ object LogStore {
         val d = db() ?: return null
         return try {
             d.readableDatabase.rawQuery(
-                "SELECT tags, base_count, time FROM ai_log " +
+                "SELECT tags, base_count, time, dims FROM ai_log " +
                     "WHERE series_id=? AND tags IS NOT NULL ORDER BY _id DESC LIMIT 1",
                 arrayOf(seriesId)
             ).use { c ->
@@ -317,11 +334,23 @@ object LogStore {
                         )
                     )
                 }
+                // 六维评分：JSON 对象 {"剧情":8.5,...}；缺失/损坏/旧记录为 null
+                val dims: FloatArray? = c.getString(3)?.let { dj ->
+                    try {
+                        val o = JSONObject(dj)
+                        FloatArray(DimensionAnalyzer.LABELS.size) { i ->
+                            o.getDouble(DimensionAnalyzer.LABELS[i]).toFloat().coerceIn(1f, 10f)
+                        }
+                    } catch (t: Throwable) {
+                        null
+                    }
+                }
                 // 恢复时重排：count 降序、count 相同负面在前（历史记录落库时可能未做负面平局排序）
                 CachedSummary(
                     tags.sortedWith(AiClient.Tag.COMPARATOR),
                     c.getInt(1),
-                    c.getLong(2)
+                    c.getLong(2),
+                    dims
                 )
             }
         } catch (t: Throwable) {

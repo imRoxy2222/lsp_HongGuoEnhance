@@ -28,6 +28,7 @@ object ModuleConfig {
     const val KEY_AI_VIA_MODULE = "ai_via_module"       // AI 请求经进程桥走模块进程（默认开启）
     const val KEY_THINKING_PROVIDERS = "thinking_providers" // 勾选携带"关闭思考"字段的平台 id，逗号分隔
     const val KEY_EXCLUDE_RULES = "exclude_rules" // 评论过滤正则规则（JSON 字符串数组，按顺序编号）
+    const val KEY_RADAR_DEFAULT = "radar_default_view" // 词条弹窗默认显示六维雷达图（false=词条条形图）
 
     /** 单条过滤规则：正则 + 备注（标注该规则的适用情况，设置页展示用，可空）。 */
     data class FilterRule(val pattern: String, val note: String)
@@ -99,6 +100,7 @@ object ModuleConfig {
     const val DEFAULT_LOG_MAX_SIZE_MB = 100
     const val DEFAULT_DISABLE_THINKING = true
     const val DEFAULT_AI_VIA_MODULE = true
+    const val DEFAULT_RADAR_DEFAULT = false
 
     @Volatile
     private var prefs: SharedPreferences? = null
@@ -147,6 +149,10 @@ object ModuleConfig {
     /** AI 请求是否经进程桥由模块进程发出（未配置时默认开启；关掉则宿主进程直连）。 */
     fun aiViaModule(): Boolean =
         p().getBoolean(KEY_AI_VIA_MODULE, DEFAULT_AI_VIA_MODULE)
+
+    /** 词条弹窗默认页：true = 六维雷达图，false = 词条条形图（滑动切换不受影响）。 */
+    fun radarAsDefault(): Boolean =
+        p().getBoolean(KEY_RADAR_DEFAULT, DEFAULT_RADAR_DEFAULT)
 
     /**
      * 勾选了携带"关闭思考"字段的平台 id 集合（未配置时按各选项的

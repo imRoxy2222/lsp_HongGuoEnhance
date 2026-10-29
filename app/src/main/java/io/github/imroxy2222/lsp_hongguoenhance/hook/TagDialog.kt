@@ -12,10 +12,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
+import android.widget.*
 import io.github.imroxy2222.lsp_hongguoenhance.hook.TagDialog.Companion.MAX_SHOWN_TAGS
 
 /**
@@ -28,6 +25,12 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
 
     private lateinit var stateView: TextView
     private lateinit var tagContainer: LinearLayout
+    private lateinit var carousel: TwoPageCarousel
+    private lateinit var radarView: RadarChartView
+    private lateinit var radarCaption: TextView
+    private lateinit var dotTag: View
+    private lateinit var dotRadar: View
+    private lateinit var pageLabel: TextView
     private lateinit var loadMoreBtn: Button
     private lateinit var retryBtn: Button
     private var lastTags: List<AiClient.Tag> = emptyList()
@@ -98,13 +101,80 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(12f), 0, dp(4f))
         }
+        val tagsPage = ScrollView(context).apply { addView(tagContainer) }
+
+        // 六维评分页：雷达图 + 说明行
+        radarView = RadarChartView(context)
+        radarCaption = TextView(context).apply {
+            textSize = 11f
+            setTextColor(Color.parseColor("#9AA0A6"))
+            gravity = Gravity.CENTER
+            setPadding(dp(8f), 0, dp(8f), 0)
+        }
+        val radarPage = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            addView(
+                radarView,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(240f)
+                )
+            )
+            addView(radarCaption)
+        }
+
+        // 无限双页轮播：左滑/右滑在「评论词条 ⇄ 六维评分」间循环切换
+        carousel = TwoPageCarousel(context).apply {
+            addView(
+                tagsPage,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            )
+            addView(
+                radarPage,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            )
+            onPageSettled = { updateIndicator(it) }
+        }
         root.addView(
-            ScrollView(context).apply { addView(tagContainer) },
+            carousel,
             LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(8f) }
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(300f)
+            ).apply { bottomMargin = dp(2f) }
         )
+
+        // 页指示器：两枚圆点 + 当前页名
+        dotTag = makeDot()
+        dotRadar = makeDot()
+        pageLabel = TextView(context).apply {
+            textSize = 11f
+            setTextColor(Color.parseColor("#9AA0A6"))
+        }
+        val indicatorRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            addView(dotTag, dotParams())
+            addView(dotRadar, dotParams().apply { marginStart = dp(6f) })
+            addView(
+                pageLabel, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { marginStart = dp(10f) })
+        }
+        root.addView(indicatorRow)
+        // 默认页可配置（设置页「默认显示六维雷达图」开关）
+        val defaultPage = try {
+            if (ModuleConfig.radarAsDefault()) 1 else 0
+        } catch (t: Throwable) {
+            0
+        }
+        carousel.setCurrentPage(defaultPage)
+        updateIndicator(defaultPage)
 
         // 按钮行
         val btnRow = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
@@ -154,6 +224,27 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
             val totalInfo =
                 if (tags.size > shown.size) "（共 ${tags.size} 个，显示前 ${shown.size}）" else " · 共 ${tags.size} 个词条"
             stateView.text = styledStats("${Pipeline.statsLine(seriesId)}$totalInfo")
+            // 同步刷新六维雷达：AI 返回的六维评分优先，AI 未返回时回退本地关键词分析
+            val cache = Pipeline.cacheOf(seriesId)
+            val aiDims = cache?.dims
+            if (cache != null && aiDims != null && aiDims.size == 6) {
+                radarView.setData(
+                    DimensionAnalyzer.Result(
+                        DimensionAnalyzer.LABELS, aiDims.toList(),
+                        emptyList(), 0f, cache.comments.size
+                    )
+                )
+                radarCaption.text = "AI 六维评分 · 基于 ${cache.comments.size} 条 AI 参考评论"
+            } else {
+                radarView.setData(
+                    if (cache == null) null
+                    else DimensionAnalyzer.analyze(
+                        cache.comments.toList(), cache.scoreSum, cache.rawCount
+                    )
+                )
+                radarCaption.text =
+                    "依据 ${cache?.comments?.size ?: 0} 条 AI 参考评论关键词推算 · 未提及维度取整体平均分"
+            }
         }
     }
 
@@ -228,6 +319,24 @@ class TagDialog(private val activity: Activity, val seriesId: String) : Dialog(a
             ).apply { bottomMargin = dp(10f) }
         }
     }
+
+    /** 页指示器：圆点高亮当前页 */
+    private fun updateIndicator(page: Int) {
+        val radar = page == 1
+        val on = Color.parseColor("#B9FF66")
+        val off = Color.parseColor("#5A5F66")
+        (dotTag.background as? GradientDrawable)?.setColor(if (radar) off else on)
+        (dotRadar.background as? GradientDrawable)?.setColor(if (radar) on else off)
+    }
+
+    private fun makeDot(): View = View(context).apply {
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.parseColor("#5A5F66"))
+        }
+    }
+
+    private fun dotParams() = LinearLayout.LayoutParams(dp(6f), dp(6f))
 
     private fun dp(v: Float): Int = (v * context.resources.displayMetrics.density + 0.5f).toInt()
 

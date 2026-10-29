@@ -40,6 +40,9 @@ object Pipeline {
         var stateInfo: String = ""
         var tags: List<AiClient.Tag>? = null
 
+        /** 六维评分（剧情/音乐/爽感/期待/画面/节奏，各 1~10）；AI 未返回且无本地回退时为 null。 */
+        var dims: FloatArray? = null
+
         /** 生成当前词条时使用的评论数（用于"继续加载"后判断是否需要重新总结） */
         var tagsFromCount: Int = -1
     }
@@ -165,6 +168,7 @@ object Pipeline {
                     }
                     cache.tags = saved.tags
                     cache.tagsFromCount = saved.baseCount
+                    cache.dims = saved.dims
                     cache.state = State.DONE
                     cache.stateInfo = statsLine(seriesId)
                     LogStore.appendMeta(seriesId, cache.seriesName)
@@ -382,14 +386,36 @@ object Pipeline {
         }
         cache.tags = mergedTags
         cache.tagsFromCount = cache.comments.size
+        // 六维评分：AI 返回优先；未返回或增量合并不足时回退本地关键词分析。
+        // AI 的 dims 只反映本次发送的批次，增量模式下按评论数加权合并旧值。
+        cache.dims = when {
+            !incremental ->
+                result.dims ?: localDims(cache)
+            else -> mergeDims(
+                cache.dims, cache.tagsFromCount.coerceAtLeast(1),
+                result.dims, toSummarize.size.coerceAtLeast(1)
+            ) ?: localDims(cache)
+        }
         LogStore.appendTags(
-            seriesId, mergedTags, cache.comments.size, result.request, result.response
+            seriesId, mergedTags, cache.comments.size, result.request, result.response, cache.dims
         )
         val tags = mergedTags
         main.post {
             updateState(seriesId, State.DONE, statsLine(seriesId))
             activeDialog?.get()?.takeIf { it.seriesId == seriesId }?.onTags(tags)
         }
+    }
+
+    /** 本地关键词回退：AI 未返回六维评分时用已采集评论推算。 */
+    private fun localDims(cache: SeriesCache): FloatArray =
+        DimensionAnalyzer.analyze(cache.comments.toList(), cache.scoreSum, cache.rawCount)
+            .scores.toFloatArray()
+
+    /** 六维评分加权合并（按各自覆盖的评论数加权）；任一为空返回另一个。 */
+    private fun mergeDims(a: FloatArray?, wa: Int, b: FloatArray?, wb: Int): FloatArray? {
+        if (a == null || a.size != 6) return b
+        if (b == null || b.size != 6) return a
+        return FloatArray(6) { i -> (a[i] * wa + b[i] * wb) / (wa + wb) }
     }
 
     private fun updateState(seriesId: String, state: State, info: String) {
