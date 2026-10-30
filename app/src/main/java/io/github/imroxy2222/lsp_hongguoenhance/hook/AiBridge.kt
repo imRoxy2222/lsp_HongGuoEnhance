@@ -33,16 +33,11 @@ object AiBridge {
             .put(AiBridgeProvider.KEY_REQUEST, requestText)
         val extras = Bundle().apply { putString(AiBridgeProvider.EXTRA_REQUEST, req.toString()) }
 
-        val reply = try {
-            context().contentResolver.call(authorityUri(), AiBridgeProvider.METHOD_SUMMARIZE, null, extras)
-        } catch (e: IllegalArgumentException) {
-            // authority 不存在：模块未安装新版本 / 被强停 / Provider 未生效
-            throw bridgeUnavailable(e)
-        } catch (e: SecurityException) {
-            throw bridgeUnavailable(e)
-        } catch (e: IllegalStateException) {
-            throw bridgeUnavailable(e)
-        }
+        val app = context()
+        // 顺手确保保活绑定存在（幂等、失败静默；即便绑定失败，
+        // 下面的 ContentResolver.call 也会自动拉起模块进程）
+        BridgeKeepAlive.ensureBound(app)
+        val reply = callBridge(app, extras)
 
         reply?.getString(AiBridgeProvider.EXTRA_ERROR)?.let { err ->
             // 模块进程内执行失败（接口 4xx/5xx/网络错误/解析失败），原样向上抛
@@ -77,6 +72,31 @@ object AiBridge {
         }
         Logger.i("ai summarize via module process: tags=${tags.size}, dims=${dims != null}")
         return AiClient.AiResult(tags, requestText, response, dims)
+    }
+
+    /**
+     * 单次进程桥调用；瞬时失败（模块进程刚被冻结 / 冷启动竞态）等待
+     * 800ms 后自动重试一次，两次都失败才判定桥不可用。
+     */
+    private fun callBridge(app: android.content.Context, extras: Bundle): Bundle? {
+        val call: () -> Bundle? = {
+            app.contentResolver.call(authorityUri(), AiBridgeProvider.METHOD_SUMMARIZE, null, extras)
+        }
+        return try {
+            call()
+        } catch (first: Exception) {
+            if (first !is IllegalArgumentException &&
+                first !is SecurityException &&
+                first !is IllegalStateException
+            ) throw first
+            Logger.w("进程桥首次调用失败（${first.javaClass.simpleName}），等待 800ms 重试一次")
+            try {
+                Thread.sleep(800)
+                call()
+            } catch (e: Exception) {
+                throw bridgeUnavailable(e)
+            }
+        }
     }
 
     private fun authorityUri(): Uri = Uri.Builder()

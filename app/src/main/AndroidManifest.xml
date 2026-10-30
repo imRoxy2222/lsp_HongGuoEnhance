@@ -74,6 +74,14 @@
             android:name=".hook.AiBridgeProvider"
             android:authorities="io.github.imroxy2222.lsp_hongguoenhance.aibridge"
             android:exported="true" />
+
+        <!-- AI 进程桥保活锚点：空服务，供宿主进程（hook 内 BridgeKeepAlive）
+             bindService(BIND_AUTO_CREATE) 自动拉起并锚定模块进程——宿主存活
+             期间模块进程不进 cached/冻结态，"AI 走模块进程"始终可用。
+             必须 exported（跨应用绑定要求）；服务无接口无数据，绑定无副作用。 -->
+        <service
+            android:name=".hook.AiKeepAliveService"
+            android:exported="true" />
     </application>
 
 </manifest>

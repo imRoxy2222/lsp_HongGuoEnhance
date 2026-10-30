@@ -86,6 +86,10 @@ object Pipeline {
                     runCatching { LogStore.init(app) }
                     runCatching { LogServer.ensureStarted(app) }
                 }.start()
+                // AI 走模块进程时绑定保活锚点（幂等、失败静默，见 BridgeKeepAlive）
+                if (runCatching { ModuleConfig.aiViaModule() }.getOrDefault(true)) {
+                    BridgeKeepAlive.ensureBound(app)
+                }
             }
         }
         Logger.i("pipeline ready")
@@ -112,6 +116,12 @@ object Pipeline {
                             runCatching { LogStore.init(app) }
                             runCatching { LogServer.ensureStarted(app) }
                         }.start()
+                        // Application 创建的第一时间建立进程桥保活绑定
+                        // （早于 onAppReady；ModuleConfig 未初始化时按默认开启处理）
+                        runCatching { ModuleConfig.init(xposed) }
+                        if (runCatching { ModuleConfig.aiViaModule() }.getOrDefault(true)) {
+                            BridgeKeepAlive.ensureBound(app)
+                        }
                     }
                 }
                 chain.proceed()
@@ -385,7 +395,12 @@ object Pipeline {
                     AiBridge.summarize(toSummarize, cache.seriesName, previous)
                 } catch (e: AiBridge.BridgeException) {
                     Logger.w("进程桥不可用，回退宿主进程直连: ${e.message}")
-                    updateState(seriesId, State.AI_PENDING, "进程桥不可用，改为宿主进程直连...")
+                    updateState(
+                        seriesId, State.AI_PENDING,
+                        "进程桥不可用，改为宿主进程直连..." +
+                            "（多为模块被划掉后台/强停所致：ROM 禁止拉起 stopped 应用，" +
+                            "打开一次模块设置页即可恢复桥接）"
+                    )
                     AiClient.summarize(toSummarize, cache.seriesName, previous)
                 }
             } else {
