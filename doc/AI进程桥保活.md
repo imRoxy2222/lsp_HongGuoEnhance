@@ -42,6 +42,17 @@
 `IllegalStateException` 时，等待 800ms 后**自动重试一次**（覆盖解冻与冷启动
 竞态）；两次都失败才抛 `BridgeException`，按既有逻辑回退宿主直连。
 
+## 回退 Toast 提醒
+
+回退发生时（`Pipeline` 的桥回退分支），会在宿主进程内弹一个 Toast：
+
+> **模块进程未运行，AI 网络已回退到红果进程**
+
+- 宿主进程拿不到 UI，用 `ActivityThread.currentApplication()` 的 Application
+  Context 弹 Toast（经主线程 Handler 投递，后台线程可直接调用）；
+- **15 秒节流**：连续总结（增量合并等短时间多次回退）只弹一次，避免刷屏；
+- 提醒为纯提示，任何异常静默，绝不影响 AI 主流程与既有回退逻辑。
+
 ## 无法覆盖的场景与用户侧建议
 
 - **stopped 状态拉不起来**（强行停止/省电强停后，绑定与 call 均被系统拒绝）：

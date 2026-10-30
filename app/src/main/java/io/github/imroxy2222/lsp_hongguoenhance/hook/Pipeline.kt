@@ -18,6 +18,34 @@ import java.util.concurrent.Executors
 object Pipeline {
     private const val TAG = HookEntry.TAG
 
+    /** 桥回退 Toast 的节流间隔：连续总结（增量合并等）时避免刷屏。 */
+    private const val BRIDGE_TOAST_INTERVAL_MS = 15_000L
+    private val lastBridgeToastAt = java.util.concurrent.atomic.AtomicLong(0L)
+
+    /**
+     * 宿主进程内弹 Toast：桥回退时提醒用户"模块进程未运行，AI 网络已回退到红果进程"。
+     * 主线程执行；15s 节流；所有异常静默——提醒绝不影响 AI 主流程。
+     */
+    private fun toastBridgeFallback() {
+        runCatching {
+            val app = Class.forName("android.app.ActivityThread")
+                .getMethod("currentApplication").invoke(null) as? android.content.Context
+                ?: return
+            val now = System.currentTimeMillis()
+            val last = lastBridgeToastAt.get()
+            if (now - last < BRIDGE_TOAST_INTERVAL_MS) return
+            if (!lastBridgeToastAt.compareAndSet(last, now)) return
+            Handler(Looper.getMainLooper()).post {
+                runCatching {
+                    android.widget.Toast.makeText(
+                        app, "模块被kill,AI通信回退",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
     enum class State { IDLE, COLLECTING, AI_PENDING, DONE, ERROR }
 
     class SeriesCache(
@@ -402,6 +430,7 @@ object Pipeline {
                     AiBridge.summarize(toSummarize, cache.seriesName, previous)
                 } catch (e: AiBridge.BridgeException) {
                     Logger.w("进程桥不可用，回退宿主进程直连: ${e.message}")
+                    toastBridgeFallback()
                     updateState(
                         seriesId, State.AI_PENDING,
                         "进程桥不可用，改为宿主进程直连..." +
