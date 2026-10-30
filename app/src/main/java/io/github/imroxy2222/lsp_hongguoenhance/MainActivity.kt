@@ -627,15 +627,11 @@ fun SettingsScreen(
                 }
                 HelpField(
                     title = "AI 输入 Token 上限",
-                    help = "免费/低价模型常限制单次输入 token 数，超限会报错（如 419/400）。\n\n" +
-                            "按 1 个字符 ≈ 0.5 token 估算（system 提示词计入）：\n" +
-                            "未超限时按\"首次采集评论数/单批加载条数\"的条数发送；\n" +
-                            "超限时自动按原顺序少发评论（从尾部丢弃），字符数限制优先于条数限制；\n" +
-                            "连一条完整评论都放不下时会截断首条评论本体。\n\n" +
+                    help = "设置输入token限制, 每个模型token计算方式不一样, 免费模型一般有输入token限制,建议设置为官方限制的75%,官方限制7000设置为5400较合适, 此限制优先级最高\n\n" +
                             "0 = 不限制（默认）。",
                     value = aiInputTokenLimit,
                     onValueChange = { aiInputTokenLimit = it.filter { c -> c.isDigit() } },
-                    placeholder = "如 4096，0 = 不限制",
+                    placeholder = "0 = 不限制",
                     onFocusLost = { autoSave() }
                 )
                 // 提示词预设模板：下拉选择框（item 右侧编辑图标可改模板文本，支持恢复默认；
