@@ -17,6 +17,7 @@ local.properties
 *.tmp
 *.jks
 *.b64
+.zed/tasks.json
 
 # Kotlin 编译器会话文件
 .kotlin/

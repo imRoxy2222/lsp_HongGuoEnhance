@@ -21,7 +21,20 @@
             android:exported="false"
             android:label="@string/app_name"
             android:theme="@style/Theme.HongGuoEnhance"
-            android:windowSoftInputMode="adjustResize" />
+            android:windowSoftInputMode="adjustResize">
+            <!-- 模块设置页标准入口（Xposed/LSPosed 规范类别）：桌面图标被隐藏
+                 (.LauncherAlias 被禁用) 后，LSPosed 管理器通过该类别仍能解析到
+                 启动 Intent（AppHelper.getSettingsIntent 优先查此类别），
+                 "启动"按钮因此不会消失。INFO 类别是 getLaunchIntentForPackage
+                 的第一优先回退，一并声明。exported 保持 false：LSPosed 守护进程
+                 以 root 身份启动，无需导出。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="de.robv.android.xposed.category.MODULE_SETTINGS" />
+                <category android:name="android.intent.category.INFO" />
+            </intent-filter>
+        </activity>
 
         <!-- LAUNCHER intent-filter 挂在别名上：隐藏桌面图标 = 禁用本别名,
              MainActivity 本体保持可用, 隐藏后在 LSPosed 管理器中打开 -->
