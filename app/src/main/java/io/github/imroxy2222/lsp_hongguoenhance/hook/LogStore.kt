@@ -283,6 +283,10 @@ object LogStore {
             val rawTexts = HashSet<String>()
             var rawCount = 0
             var scoreSum = 0.0
+            // 历史行可能重复（落库后未及保存游标就中断 → 重拉同页再落一次等）：
+            // 回读按文本去重，保证 rawCount/评分累计/已用评论与运行期
+            // accumulateRaw 的去重口径一致，否则恢复后统计数字会互相矛盾
+            val seenRows = HashSet<String>()
             d.readableDatabase.rawQuery(
                 "SELECT text, used, score FROM comment WHERE series_id=? ORDER BY _id",
                 arrayOf(seriesId)
@@ -290,6 +294,7 @@ object LogStore {
                 while (c.moveToNext()) {
                     exists = true
                     val text = c.getString(0)
+                    if (!seenRows.add(text)) continue
                     rawTexts.add(text)
                     rawCount++
                     if (c.getInt(1) == 1) usedComments.add(text)

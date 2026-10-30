@@ -322,10 +322,17 @@ object Pipeline {
             try {
                 updateState(seriesId, State.COLLECTING, "正在采集剧评...")
                 val target = ModuleConfig.targetCount()
+                // 跨页/页内按文本去重：分页接口可能返回重叠评论（热评/置顶跨窗口
+                // 重复出现等），不去重会让 cache.comments 混入重复文本——
+                // rawCount 在 accumulateRaw 中是去重的，"AI 参考"条数会反而大于"总"条数
+                val seen = HashSet(cache.comments)
+                fun addComments(texts: List<String>) {
+                    for (t in texts) if (seen.add(t)) cache.comments.add(t)
+                }
                 var page = CommentFetcher.fetchPage(seriesId, null, ModuleConfig.pageCount())
                 // 精确截断：首次采集 target 是"恰好 N 条"语义，
                 // 页内合格数可能超过剩余缺口（如 target=10、页 count=30），按缺口截取
-                cache.comments.addAll(page.comments.take(target))
+                addComments(page.comments.take(target))
                 accumulateRaw(cache, page)
                 LogStore.appendComments(seriesId, page.all, page.used, page.scores, page.reasons)
                 cache.cursor = page.cursor
@@ -336,7 +343,7 @@ object Pipeline {
                     page = CommentFetcher.fetchPage(seriesId, page.cursor, ModuleConfig.pageCount())
                     // 只补足缺口，多余合格评论留待"继续加载"（避免 9+2=11 超量发给 AI）
                     val remaining = target - cache.comments.size
-                    cache.comments.addAll(page.comments.take(remaining))
+                    addComments(page.comments.take(remaining))
                     accumulateRaw(cache, page)
                     LogStore.appendComments(seriesId, page.all, page.used, page.scores, page.reasons)
                     cache.cursor = page.cursor
