@@ -29,6 +29,7 @@ object ModuleConfig {
     const val KEY_LOG_DB_PATH = "log_db_path"     // 宿主端真实日志数据库路径上报（root 直读用）
     const val KEY_DISABLE_THINKING = "disable_thinking" // AI 请求关闭思考模式（默认开启）
     const val KEY_AI_VIA_MODULE = "ai_via_module"       // AI 请求经进程桥走模块进程（默认开启）
+    const val KEY_AI_INPUT_TOKEN_LIMIT = "ai_input_token_limit" // AI 输入 token 上限（0=不限制）
     const val KEY_THINKING_PROVIDERS = "thinking_providers" // 勾选携带"关闭思考"字段的平台 id，逗号分隔
     const val KEY_EXCLUDE_RULES = "exclude_rules" // 评论过滤正则规则（JSON 字符串数组，按顺序编号）
     const val KEY_RADAR_DEFAULT = "radar_default_view" // 词条弹窗默认显示六维雷达图（false=词条条形图）
@@ -103,6 +104,7 @@ object ModuleConfig {
     const val DEFAULT_LOG_MAX_SIZE_MB = 100
     const val DEFAULT_DISABLE_THINKING = true
     const val DEFAULT_AI_VIA_MODULE = true
+    const val DEFAULT_AI_INPUT_TOKEN_LIMIT = 0
     const val DEFAULT_RADAR_DEFAULT = false
 
     @Volatile
@@ -179,6 +181,13 @@ object ModuleConfig {
     /** AI 请求是否经进程桥由模块进程发出（未配置时默认开启；关掉则宿主进程直连）。 */
     fun aiViaModule(): Boolean =
         p().getBoolean(KEY_AI_VIA_MODULE, DEFAULT_AI_VIA_MODULE)
+
+    /**
+     * AI 输入 token 上限（0=不限制）：按 1 字符 ≈ 0.5 token 估算，
+     * 超限时 AiClient 自动少发评论，避免免费模型输入超限报错（419/400）。
+     */
+    fun aiInputTokenLimit(): Int =
+        p().getInt(KEY_AI_INPUT_TOKEN_LIMIT, DEFAULT_AI_INPUT_TOKEN_LIMIT).coerceIn(0, 1_000_000)
 
     /** 词条弹窗默认页：true = 六维雷达图，false = 词条条形图（滑动切换不受影响）。 */
     fun radarAsDefault(): Boolean =

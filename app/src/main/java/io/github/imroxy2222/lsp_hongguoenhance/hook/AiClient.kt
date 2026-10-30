@@ -21,6 +21,9 @@ object AiClient {
     private const val CONNECT_TIMEOUT = 15_000
     private const val READ_TIMEOUT = 120_000
 
+    /** 输入 token 估算口径：1 token ≈ 2 字符（即 1 个字 ≈ 0.5 token）。 */
+    internal const val CHARS_PER_TOKEN = 2
+
     /**
      * 词条：negative=true 表示负面评价词条，neutral=true 表示中性/客观描述词条
      * （两者互斥；AI 未标注时均为 false，即普通词条）。
@@ -57,26 +60,79 @@ object AiClient {
         seriesName: String?,
         previousTags: List<String> = emptyList(),
     ): AiResult {
-        val requestText = buildRequestText(comments, seriesName, previousTags)
+        val built = buildRequest(comments, seriesName, previousTags)
+        if (built.sentComments < built.totalComments) {
+            Logger.i(
+                "AI 输入超限：${built.totalComments} 条评论发送前 ${built.sentComments} 条" +
+                        "（估算 ~${built.estimatedTokens} tokens）"
+            )
+        }
         val baseUrl = ModuleConfig.baseUrl().trimEnd('/')
         val apiKey = ModuleConfig.apiKey()
-        return summarizeRaw(baseUrl, apiKey, requestText)
+        return summarizeRaw(baseUrl, apiKey, built.body)
     }
+
+    /**
+     * 一次组包结果：请求体 + 实际发送的评论数（输入超限时少于传入数）
+     * + 估算输入 token 数（1 字符 ≈ 0.5 token）。
+     */
+    data class BuiltRequest(
+        val body: String,
+        val sentComments: Int,
+        val totalComments: Int,
+        val estimatedTokens: Int,
+    )
 
     /**
      * 组装完整的 /chat/completions 请求体（读取 ModuleConfig）。
      * 独立出来供宿主进程组包后经进程桥发给模块进程执行。
+     *
+     * AI 输入长度限制（免费模型常有输入 token 上限，超限报 419/400）：
+     * 设置页可配置 token 上限，按 1 字符 ≈ 0.5 token 估算（system 提示词
+     * 计入）；超限时保持评论原顺序、从尾部丢弃，直到放得下为止——
+     * 条数限制（首次采集评论数/单批加载条数）让位于字符数限制。
+     * 连一条完整评论都放不下时，截断首条评论本体（尾部加省略号）。
      */
-    fun buildRequestText(
+    fun buildRequest(
         comments: List<String>,
         seriesName: String?,
         previousTags: List<String> = emptyList(),
-    ): String {
+    ): BuiltRequest {
         val apiKey = ModuleConfig.apiKey()
         if (apiKey.isEmpty()) throw AiException("尚未配置 API Key，请打开模块设置页配置")
 
         val systemPrompt = buildSystemPrompt(previousTags)
-        val userPrompt = buildUserPrompt(comments, seriesName)
+
+        // 长度限制：二分查找能放下的最大评论条数（每条评论长度固定，组包成本低）
+        var sent = comments
+        if (ModuleConfig.aiInputTokenLimit() > 0 && comments.isNotEmpty()) {
+            val budget = ModuleConfig.aiInputTokenLimit() * CHARS_PER_TOKEN
+            fun charsOf(k: Int) = systemPrompt.length + buildUserPrompt(comments.take(k), seriesName).length
+            if (charsOf(comments.size) > budget) {
+                var lo = 1
+                var hi = comments.size - 1
+                var best = 0
+                while (lo <= hi) {
+                    val mid = (lo + hi) / 2
+                    if (charsOf(mid) <= budget) {
+                        best = mid
+                        lo = mid + 1
+                    } else {
+                        hi = mid - 1
+                    }
+                }
+                sent = if (best > 0) comments.take(best) else {
+                    // 连 1 条完整评论都放不下：截断首条评论本体
+                    // base = 剧名行 + "以下是 1 条评论：" + "1. " + 换行的骨架长度
+                    val base = buildUserPrompt(listOf(""), seriesName).length
+                    val room = budget - systemPrompt.length - base - 1
+                    val text = comments[0].replace('\n', ' ')
+                    listOf(if (room in 1 until text.length) text.take(room - 1) + "…" else text)
+                }
+            }
+        }
+
+        val userPrompt = buildUserPrompt(sent, seriesName)
 
         val body = JSONObject().apply {
             put("model", ModuleConfig.model())
@@ -90,8 +146,19 @@ object AiClient {
         }
         val msg = JSONObject().put("role", "user").put("content", userPrompt)
         body.getJSONArray("messages").put(msg)
-        return body.toString()
+        val totalChars = systemPrompt.length + userPrompt.length
+        return BuiltRequest(
+            body.toString(), sent.size, comments.size,
+            (totalChars + 1) / 2  // ceil(chars / 2)：1 字符 ≈ 0.5 token
+        )
     }
+
+    /** 兼容旧签名：仅需要请求体文本时使用（组包与截断逻辑见 [buildRequest]）。 */
+    fun buildRequestText(
+        comments: List<String>,
+        seriesName: String?,
+        previousTags: List<String> = emptyList(),
+    ): String = buildRequest(comments, seriesName, previousTags).body
 
     /**
      * 用现成的请求体执行总结（不读配置，任何进程可调用）。

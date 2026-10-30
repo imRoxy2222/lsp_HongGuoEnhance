@@ -112,11 +112,11 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     },
-                    onSave = { baseUrl, apiKey, model, targetCount, pageCount, extraPrompt,
+                    onSave = { baseUrl, apiKey, model, targetCount, pageCount, aiInputTokenLimit, extraPrompt,
                                logRetentionDays, logMaxSizeMb, disableThinking, aiViaModule,
                                radarDefault, promptPreset, thinkingProviders ->
                         saveConfig(
-                            baseUrl, apiKey, model, targetCount, pageCount, extraPrompt,
+                            baseUrl, apiKey, model, targetCount, pageCount, aiInputTokenLimit, extraPrompt,
                             logRetentionDays, logMaxSizeMb, disableThinking, aiViaModule,
                             radarDefault, promptPreset, thinkingProviders
                         )
@@ -171,6 +171,9 @@ class MainActivity : ComponentActivity() {
             ModuleConfig.KEY_PAGE_COUNT to p.getInt(
                 ModuleConfig.KEY_PAGE_COUNT, ModuleConfig.DEFAULT_PAGE_COUNT
             ),
+            ModuleConfig.KEY_AI_INPUT_TOKEN_LIMIT to p.getInt(
+                ModuleConfig.KEY_AI_INPUT_TOKEN_LIMIT, ModuleConfig.DEFAULT_AI_INPUT_TOKEN_LIMIT
+            ),
             ModuleConfig.KEY_EXTRA_PROMPT to (p.getString(ModuleConfig.KEY_EXTRA_PROMPT, "") ?: ""),
             ModuleConfig.KEY_PROMPT_PRESET to (p.getString(ModuleConfig.KEY_PROMPT_PRESET, "") ?: ""),
             ModuleConfig.KEY_LOG_RETENTION_DAYS to p.getInt(
@@ -196,7 +199,7 @@ class MainActivity : ComponentActivity() {
 
     private fun saveConfig(
         baseUrl: String, apiKey: String, model: String,
-        targetCount: Int, pageCount: Int, extraPrompt: String,
+        targetCount: Int, pageCount: Int, aiInputTokenLimit: Int, extraPrompt: String,
         logRetentionDays: Int, logMaxSizeMb: Int,
         disableThinking: Boolean, aiViaModule: Boolean,
         radarDefault: Boolean, promptPreset: String, thinkingProviders: Set<String>,
@@ -213,6 +216,7 @@ class MainActivity : ComponentActivity() {
             .putString(ModuleConfig.KEY_MODEL, model.trim())
             .putInt(ModuleConfig.KEY_TARGET_COUNT, targetCount)
             .putInt(ModuleConfig.KEY_PAGE_COUNT, pageCount)
+            .putInt(ModuleConfig.KEY_AI_INPUT_TOKEN_LIMIT, aiInputTokenLimit)
             .putString(ModuleConfig.KEY_EXTRA_PROMPT, extraPrompt)
             .putString(ModuleConfig.KEY_PROMPT_PRESET, promptPreset)
             .putInt(ModuleConfig.KEY_LOG_RETENTION_DAYS, logRetentionDays)
@@ -235,7 +239,7 @@ fun SettingsScreen(
     rootFramework: Boolean,
     frameworkLabel: String?,
     onScopeRequest: () -> Unit,
-    onSave: (String, String, String, Int, Int, String, Int, Int, Boolean, Boolean, Boolean, String, Set<String>) -> Unit,
+    onSave: (String, String, String, Int, Int, Int, String, Int, Int, Boolean, Boolean, Boolean, String, Set<String>) -> Unit,
     onOpenLogs: () -> Unit,
     onOpenFilterRules: () -> Unit,
     onHideIconChange: (Boolean) -> Unit,
@@ -258,6 +262,12 @@ fun SettingsScreen(
         mutableStateOf(
             ((initial?.get(ModuleConfig.KEY_PAGE_COUNT) as? Int)
                 ?: ModuleConfig.DEFAULT_PAGE_COUNT).toString()
+        )
+    }
+    var aiInputTokenLimit by remember(initial) {
+        mutableStateOf(
+            ((initial?.get(ModuleConfig.KEY_AI_INPUT_TOKEN_LIMIT) as? Int)
+                ?: ModuleConfig.DEFAULT_AI_INPUT_TOKEN_LIMIT).toString()
         )
     }
     var extraPrompt by remember(initial) { mutableStateOf(str(ModuleConfig.KEY_EXTRA_PROMPT, "")) }
@@ -318,6 +328,8 @@ fun SettingsScreen(
         model.ifBlank { ModuleConfig.DEFAULT_MODEL },
         targetCount.toIntOrNull()?.coerceIn(10, 200) ?: ModuleConfig.DEFAULT_TARGET_COUNT,
         pageCount.toIntOrNull()?.coerceIn(5, 30) ?: ModuleConfig.DEFAULT_PAGE_COUNT,
+        aiInputTokenLimit.toIntOrNull()?.coerceIn(0, 1_000_000)
+            ?: ModuleConfig.DEFAULT_AI_INPUT_TOKEN_LIMIT,
         extraPrompt,
         promptPreset,
         logRetentionDays.toIntOrNull()?.coerceIn(0, 3650)
@@ -345,6 +357,8 @@ fun SettingsScreen(
                 ?: ModuleConfig.DEFAULT_TARGET_COUNT,
             pageCount.toIntOrNull()?.coerceIn(5, 30)
                 ?: ModuleConfig.DEFAULT_PAGE_COUNT,
+            aiInputTokenLimit.toIntOrNull()?.coerceIn(0, 1_000_000)
+                ?: ModuleConfig.DEFAULT_AI_INPUT_TOKEN_LIMIT,
             extraPrompt,
             logRetentionDays.toIntOrNull()?.coerceIn(0, 3650)
                 ?: ModuleConfig.DEFAULT_LOG_RETENTION_DAYS,
@@ -611,6 +625,19 @@ fun SettingsScreen(
                         onFocusLost = { autoSave() }
                     )
                 }
+                HelpField(
+                    title = "AI 输入 Token 上限",
+                    help = "免费/低价模型常限制单次输入 token 数，超限会报错（如 419/400）。\n\n" +
+                            "按 1 个字符 ≈ 0.5 token 估算（system 提示词计入）：\n" +
+                            "未超限时按\"首次采集评论数/单批加载条数\"的条数发送；\n" +
+                            "超限时自动按原顺序少发评论（从尾部丢弃），字符数限制优先于条数限制；\n" +
+                            "连一条完整评论都放不下时会截断首条评论本体。\n\n" +
+                            "0 = 不限制（默认）。",
+                    value = aiInputTokenLimit,
+                    onValueChange = { aiInputTokenLimit = it.filter { c -> c.isDigit() } },
+                    placeholder = "如 4096，0 = 不限制",
+                    onFocusLost = { autoSave() }
+                )
                 // 提示词预设模板：下拉选择框（item 右侧编辑图标可改模板文本，支持恢复默认；
                 // 新增模板只需在 PromptPresets.PRESETS 加条目）
                 Row(verticalAlignment = Alignment.CenterVertically) {
